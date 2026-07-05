@@ -10,3 +10,5 @@ data/
 
 # OS
 .DS_Store
+/venv/
+/qdrant_storage/

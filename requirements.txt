@@ -13,3 +13,6 @@ tqdm==4.66.4
 # PBI 6 — FastAPI service layer (REST seam for React, OD12)
 fastapi==0.111.0
 uvicorn==0.29.0
+sentence-transformers
+scikit-learn
+plotly
