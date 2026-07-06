@@ -2,7 +2,7 @@ import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
 from sklearn.decomposition import PCA
-from qdrant import init_connections, get_all_paper_titles, fetch_paper_by_title
+from qdrant_utils import init_connections, get_all_paper_titles, fetch_paper_by_title
 
 # -----------------------------------------------------------------------------
 # CONFIGURATION & INITIALIZATION
