@@ -10,6 +10,8 @@ data/
 
 # OS
 .DS_Store
+/venv/
+/qdrant_storage/
 
 # User excluded files
 authentic_citation_graph.png
