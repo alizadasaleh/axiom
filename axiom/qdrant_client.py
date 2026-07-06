@@ -91,6 +91,7 @@ class AxiomQdrant:
         points: list[dict],
         vectors: list[list[float]],
         sparse_vectors: list[tuple[list[int], list[float]]] | None = None,
+        batch_size: int = 256,
     ) -> None:
         """Upsert one point per paper.
 
@@ -100,6 +101,10 @@ class AxiomQdrant:
         sparse_vectors: optional parallel list of (indices, values) BM25 vectors.
             When provided, each point also gets the named sparse vector so
             `search_hybrid` works.
+
+        Points are upserted in batches of `batch_size` — a single request for a
+        few thousand dense+sparse vectors overruns the client write timeout
+        (fine at the 30-paper synthetic scale, not at real-corpus scale).
         """
         structs = []
         for idx, (payload, vec) in enumerate(zip(points, vectors)):
@@ -110,7 +115,11 @@ class AxiomQdrant:
                     indices=s_idx, values=s_val
                 )
             structs.append(PointStruct(id=idx, vector=named, payload=payload))
-        self.client.upsert(collection_name=self.collection, points=structs)
+        for start in range(0, len(structs), batch_size):
+            self.client.upsert(
+                collection_name=self.collection,
+                points=structs[start:start + batch_size],
+            )
 
     # --- reads --------------------------------------------------------------
     @staticmethod

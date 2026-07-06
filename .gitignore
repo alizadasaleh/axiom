@@ -10,3 +10,17 @@ data/
 
 # OS
 .DS_Store
+
+# User excluded files
+authentic_citation_graph.png
+authentic_trend_chart.png
+citation_network_graph.jpg
+citation_network_graph_aviation_telecom.jpg
+citation_network_graph_light_bg.jpg
+citation_network_graph_updated.jpg
+docs/experiment-openalex-3k-trending.md
+evaluation_chart.png
+generate_eval_chart.py
+generate_plots.py
+scripts/ingest_acl_corpus.py
+trend_velocity_chart.jpg

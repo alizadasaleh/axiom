@@ -31,7 +31,7 @@ st.set_page_config(page_title="Axiom — Thesis Discovery", layout="wide")
 st.title("Axiom — Research Trends & Gaps Discovery")
 st.caption(
     f"Collection `{config.COLLECTION_NAME}` · model `{config.MODEL_ID}` · "
-    "OpenAlex corpus"
+    "ACL Anthology corpus (ACL/EMNLP/COLING/NAACL, 2020–2025)"
 )
 
 
@@ -123,11 +123,19 @@ def get_meta() -> dict[str, dict]:
     finally:
         conn.close()
 
-def render_year_filter(bounds: tuple[int, int] | None, key_prefix: str) -> tuple[int, int] | None:
+def render_year_filter(
+    bounds: tuple[int, int] | None,
+    key_prefix: str,
+    min_year: int | None = None,
+) -> tuple[int, int] | None:
+    """Year range selector. `min_year` clamps the earliest selectable year —
+    e.g. the Trending tab pins the floor to config.VELOCITY_MIN_YEAR so velocity
+    never spans the noisy pre-2020 references pulled in by snowball ingestion."""
     if not bounds:
         return None
     lo, hi = bounds
-    years = list(range(lo, hi + 1))
+    floor = lo if min_year is None else min(max(min_year, lo), hi)
+    years = list(range(floor, hi + 1))
     ycol1, ycol2 = st.columns(2)
     with ycol1:
         y_from = st.selectbox("From year", years, index=0, key=f"{key_prefix}_from")
@@ -136,23 +144,29 @@ def render_year_filter(bounds: tuple[int, int] | None, key_prefix: str) -> tuple
     return (min(y_from, y_to), max(y_from, y_to))
 
 
-# --- Guard rails: Qdrant reachable & index non-empty -------------------------
+# --- Guard rails: Qdrant only gates the vector-backed tabs -------------------
+# Search + Citation graph need Qdrant vectors; Trending / Reading list / Review
+# queue are SQLite-only. A missing or empty index must NOT stop the whole app
+# (a top-level st.stop() here previously blacked out every tab, including
+# Trending). Record the status and let the two vector tabs surface it themselves.
 store = get_store()
 try:
     point_count = store.count()
+    qdrant_ok = point_count > 0
+    qdrant_msg = "" if qdrant_ok else (
+        "The vector index is empty. Run the embed/index step "
+        "(`python scripts/ingest_openalex.py` without `--no-index`, or "
+        "`python scripts/bootstrap_synthetic.py`) to enable Search and the "
+        "citation graph. Trending, Reading list and Review queue work without it."
+    )
 except Exception:
-    st.error(
-        "⚠️ Cannot reach Qdrant. Start it with `docker compose up -d`, then "
-        "run `python scripts/bootstrap_synthetic.py` to load the corpus."
+    point_count = 0
+    qdrant_ok = False
+    qdrant_msg = (
+        "⚠️ Cannot reach Qdrant. Start it with `docker compose up -d`, then run "
+        "the embed/index step. Search and the citation graph stay disabled until "
+        "then — Trending, Reading list and Review queue work without it."
     )
-    st.stop()
-
-if point_count == 0:
-    st.warning(
-        "The index is empty. Run `python scripts/bootstrap_synthetic.py` to "
-        "load the 30-paper synthetic corpus, then refresh this page."
-    )
-    st.stop()
 
 meta = get_meta()
 st.session_state.setdefault("similar_to", None)
@@ -217,6 +231,9 @@ def render_hits(hits: list[SearchHit], *, score_label: str = "score") -> None:
 # --- Search tab --------------------------------------------------------------
 def render_search() -> None:
     """Semantic/hybrid search with the venue/year filter bar."""
+    if not qdrant_ok:
+        st.warning(qdrant_msg)
+        return
     venues, bounds = get_filter_options()
     with st.container():
         fcol1, fcol2, fcol3 = st.columns([2, 2, 1])
@@ -295,25 +312,31 @@ _GRAPH3D_TEMPLATE = """
   try {
     var data = __DATA__;
     el.style.position = 'relative';
+    // Two background themes for the scene; toggled via the on-screen button.
+    var THEMES = {
+      dark:  { bg: '#0b0f19', link: 'rgba(205,222,248,0.85)', arrow: 'rgba(220,230,250,0.8)', particle: '#ffd43b' },
+      light: { bg: '#f4f6fb', link: 'rgba(60,72,95,0.7)',     arrow: 'rgba(45,55,75,0.75)',   particle: '#e8590c' }
+    };
+    var theme = THEMES.dark;
     var Graph = ForceGraph3D()(el)
       .width(el.clientWidth || 800)
       .height(HEIGHT)
       .showNavInfo(false)
-      .backgroundColor('#0b0f19')
+      .backgroundColor(theme.bg)
       .graphData(data)
       .nodeLabel('name')
       .nodeVal('val')
       .nodeColor('color')
       .nodeOpacity(0.95)
       .nodeResolution(16)
-      .linkColor(function () { return 'rgba(205,222,248,0.85)'; })
+      .linkColor(function () { return theme.link; })
       .linkWidth(1.2)
       .linkDirectionalArrowLength(3.6)
       .linkDirectionalArrowRelPos(1)
-      .linkDirectionalArrowColor(function () { return 'rgba(220,230,250,0.8)'; })
+      .linkDirectionalArrowColor(function () { return theme.arrow; })
       .linkDirectionalParticles(3)
       .linkDirectionalParticleWidth(2)
-      .linkDirectionalParticleColor(function () { return '#ffd43b'; })
+      .linkDirectionalParticleColor(function () { return theme.particle; })
       .linkDirectionalParticleSpeed(0.006)
       .onNodeClick(function (node) {
         var dist = 70;
@@ -352,11 +375,28 @@ _GRAPH3D_TEMPLATE = """
       b.onclick = fn;
       return b;
     }
+    // Re-apply colour accessors so the theme change takes effect immediately.
+    function applyTheme(t) {
+      theme = t;
+      el.style.background = t.bg;
+      Graph.backgroundColor(t.bg)
+        .linkColor(function () { return t.link; })
+        .linkDirectionalArrowColor(function () { return t.arrow; })
+        .linkDirectionalParticleColor(function () { return t.particle; });
+    }
     var bar = document.createElement('div');
     bar.style.cssText = 'position:absolute;top:10px;right:12px;display:flex;gap:6px;z-index:5;';
     bar.appendChild(mkBtn('+', function () { dolly(0.8); }));
     bar.appendChild(mkBtn('–', function () { dolly(1.25); }));
     bar.appendChild(mkBtn('▣', function () { try { Graph.zoomToFit(400, 30); } catch (e) {} }));
+    var themeBtn = mkBtn('☀', function () {
+      var light = theme === THEMES.dark;
+      applyTheme(light ? THEMES.light : THEMES.dark);
+      themeBtn.textContent = light ? '🌙' : '☀';
+      themeBtn.title = light ? 'Switch to dark background' : 'Switch to light background';
+    });
+    themeBtn.title = 'Switch to light background';
+    bar.appendChild(themeBtn);
     el.appendChild(bar);
 
     window.addEventListener('resize', function () { Graph.width(el.clientWidth || 800); });
@@ -436,6 +476,10 @@ def _render_gap_detail(g, gap) -> None:
 
 def render_graph_view() -> None:
     """Research gaps + citation structure (communities, gaps, influence)."""
+    if not qdrant_ok:
+        st.subheader("Research gaps & citation structure")
+        st.warning(qdrant_msg)
+        return
     st.subheader("Research gaps & citation structure")
     st.caption(
         "Sub-topics (communities) are detected in the citation graph; a candidate "
@@ -604,20 +648,47 @@ def render_graph_view() -> None:
 
 # --- Trending tab -------------------------------------------------------------
 def _velocity_bar_chart(items: list, color: str) -> None:
-    """One horizontal bar per concept, input order preserved (items arrive sorted)."""
+    """One horizontal bar per concept, input order preserved (items arrive sorted).
+
+    Bars diverge from a shared centered zero baseline. Each bar is labelled at its
+    tip with its share change as a percentage (2**velocity - 1), so risers read as
+    +N% and faders as -N%. The raw velocity stays in the tooltip only.
+    """
+    # log2 share-ratio -> percent change in corpus share.
+    pct = [(2 ** k.velocity - 1) * 100.0 for k in items]
     df = pd.DataFrame(
         {"concept": [k.concept for k in items],
-         "velocity": [k.velocity for k in items]}
+         "velocity": [k.velocity for k in items],
+         "pct": pct,
+         "pct_label": [f"{p:+.0f}%" for p in pct]}
     )
-    chart = (
-        alt.Chart(df)
-        .mark_bar(color=color)
-        .encode(
-            x=alt.X("velocity:Q", title="velocity (log2 share ratio)"),
-            y=alt.Y("concept:N", sort=None, title=None),  # sort=None => keep input order
-            tooltip=["concept", alt.Tooltip("velocity:Q", format="+.2f")],
-        )
+    # Symmetric domain so the zero baseline sits in the visual center and the
+    # magnitude of a rise reads the same as an equal fade.
+    bound = max((abs(v) for v in df["velocity"]), default=1.0) * 1.15 or 1.0
+    xscale = alt.Scale(domain=[-bound, bound])
+    # All items in one chart share a sign (risers positive, faders negative), so
+    # the labels sit just beyond every bar tip: past the right end for risers,
+    # past the left end for faders.
+    rising = (df["velocity"] >= 0).all()
+    align, dx = ("left", 12) if rising else ("right", -12)
+
+    base = alt.Chart(df).encode(
+        y=alt.Y("concept:N", sort=None, title=None,
+                axis=alt.Axis(labelLimit=220)),  # sort=None => keep input order
     )
+    bars = base.mark_bar(color=color).encode(
+        x=alt.X("velocity:Q",
+                title="share change (velocity = log2 share ratio)",
+                scale=xscale),
+        tooltip=["concept",
+                 alt.Tooltip("pct:Q", title="share change", format="+.1f"),
+                 alt.Tooltip("velocity:Q", title="velocity", format="+.2f")],
+    )
+    pct_labels = base.mark_text(
+        align=align, baseline="middle", dx=dx, fontWeight="bold",
+    ).encode(x=alt.X("velocity:Q", scale=xscale), text="pct_label:N")
+
+    chart = (bars + pct_labels).properties(height=alt.Step(30))
     st.altair_chart(chart, use_container_width=True)
 
 
@@ -642,7 +713,9 @@ def render_trending() -> None:
                                     key="trend_venue")
         venue = None if venue_choice == "All venues" else venue_choice
     with fcol2:
-        year_range = render_year_filter(bounds, "trend")
+        # Pin the earliest selectable year to the modern floor so velocity
+        # windows never span the noisy pre-2020 references (config note).
+        year_range = render_year_filter(bounds, "trend", min_year=config.VELOCITY_MIN_YEAR)
 
     analysis = get_velocity_analysis(venue, year_range)
     if not analysis.keywords:
@@ -658,20 +731,23 @@ def render_trending() -> None:
         f"({analysis.total_recent} papers)"
     )
 
-    # Charts show only meaningful movers: a concept in a single paper isn't a
-    # trend, and every 0->1 concept pins to the same epsilon-ceiling velocity, so
-    # charting them yields a flat wall of identical bars. Require >= MIN papers in
-    # the window a concept is moving from/to (recent for risers, prior for faders).
+    # Charts show only meaningful movers. A concept must have >= MIN papers in
+    # BOTH windows: without a real base in the prior window, a 0->N concept's
+    # share-change % is dominated by the epsilon smoothing constant (e.g. +13000%)
+    # and those degenerate values crowd out genuine risers. Requiring presence in
+    # both windows yields real growth/decline ratios. The full ranked list below
+    # still shows everything, including brand-new/vanished concepts.
     min_ct = config.VELOCITY_MIN_CHART_COUNT
     rising = [k for k in analysis.keywords
-              if k.velocity > 0 and k.recent_count >= min_ct][:15]
+              if k.velocity > 0 and k.prior_count >= min_ct and k.recent_count >= min_ct][:15]
     fading = [k for k in reversed(analysis.keywords)
-              if k.velocity < 0 and k.prior_count >= min_ct][:10]
+              if k.velocity < 0 and k.prior_count >= min_ct and k.recent_count >= min_ct][:10]
 
     if rising or fading:
         st.caption(
-            f"Charts show concepts with ≥{min_ct} papers in the compared window; "
-            "single-paper blips are excluded here but still listed below."
+            f"Charts show concepts with ≥{min_ct} papers in *both* windows "
+            "(real base → meaningful % change); brand-new or vanished concepts "
+            "are excluded here but still listed below."
         )
     else:
         st.info(

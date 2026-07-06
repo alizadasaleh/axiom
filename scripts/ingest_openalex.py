@@ -36,7 +36,16 @@ def main() -> None:
                         help="number of most-cited seed papers (default: %(default)s)")
     parser.add_argument("--no-index", action="store_true",
                         help="fetch + write SQLite only; skip embedding into Qdrant")
+    parser.add_argument("--all-venues", action="store_true",
+                        help="disable the NLP/ML venue allow-list "
+                             "(config.RELEVANT_VENUE_PATTERNS); admit every venue")
     args = parser.parse_args()
+
+    keep = None if args.all_venues else ingest.make_venue_filter(
+        config.RELEVANT_VENUE_PATTERNS)
+    if keep is not None:
+        print(f"[ingest] venue filter ON — keeping only "
+              f"{config.RELEVANT_VENUE_PATTERNS}")
 
     with ingest.OpenAlexClient() as client:
         works = ingest.snowball(
@@ -44,6 +53,7 @@ def main() -> None:
             seed_query=args.topic,
             target=args.target,
             seed_count=args.seeds,
+            keep=keep,
         )
 
     conn = db.connect()

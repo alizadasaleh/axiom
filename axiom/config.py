@@ -32,13 +32,30 @@ COLLECTION_NAME = "axiom_v1"
 OPENALEX_BASE = "https://api.openalex.org"
 OPENALEX_MAILTO = "yakub.yakubov.business@gmail.com"   # polite-pool contact
 OPENALEX_TIMEOUT = 30.0                                 # per-request seconds
-OPENALEX_MAX_RETRIES = 3                                # transient-error retries
+OPENALEX_MAX_RETRIES = 6                                # transient-error retries (rides out 429 throttles)
+OPENALEX_BACKOFF_CAP = 30.0                             # max seconds between retries
 
 SEED_QUERY = "retrieval-augmented generation"           # default seed topic
 SEED_COUNT = 50                                         # most-cited seeds to start
 CORPUS_TARGET = 500                                     # snowball stops at ~this many papers
 CITERS_PER_SEED = 25                                    # capped citers pulled per seed (per hop)
 OPENALEX_BATCH_SIZE = 50                                # ids per `openalex_id:a|b|...` fetch
+SNOWBALL_MAX_CITERS_PER_HOP = 300                       # cap citer-expansion calls/hop (bounds runtime)
+
+# Venue allow-list for the snowball (case-insensitive substring match on the
+# OpenAlex source display_name). A topic snowball drifts far off-seed via citers
+# and cited works (a RAG seed pulls in clinical-trial and manufacturing papers),
+# which floods gap/velocity analysis with irrelevant industries. When active,
+# only papers whose venue matches one of these patterns are admitted, keeping the
+# corpus in the NLP/ML world the project targets (ACL Anthology + top ML venues).
+RELEVANT_VENUE_PATTERNS = [
+    "computational linguistics",                    # ACL, NAACL, EACL, COLING, TACL, Findings, CL journal
+    "empirical methods in natural language",        # EMNLP
+    "neural information processing systems",        # NeurIPS
+    "learning representations",                     # ICLR
+    "international conference on machine learning",  # ICML
+    "aaai",                                          # AAAI
+]
 
 # --- Embeddings --------------------------------------------------------------
 # Committed team decision: SPECTER2, 768-dim. Do NOT silently swap models.
@@ -94,6 +111,13 @@ VELOCITY_EPSILON = 1e-4          # smoothing so the log2 ratio never blows up on
 # many papers in the window a concept is moving from/to before charting it; the
 # full ranked list below the charts still shows everything, low-volume flagged.
 VELOCITY_MIN_CHART_COUNT = 2
+
+# Floor for the Trending tab's year filter. Snowball ingestion drags in cited
+# references back decades, so the full span (e.g. 1975-2026) splits into a
+# near-empty pre-2000 "prior" window and a huge "recent" one, making almost every
+# concept a fake 0->N riser. We clamp the selectable "From year" to this floor so
+# velocity is only ever computed over the modern, densely-populated years.
+VELOCITY_MIN_YEAR = 2020
 
 # --- Eval corpus (OD11, PBI 8 / Task 8.2) -------------------------------------
 # Real ACL/EMNLP/COLING/NAACL corpus (2020-2025, ~23k papers), pulled from the

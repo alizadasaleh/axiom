@@ -17,11 +17,26 @@ import re
 import time
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Iterable, Iterator
+from typing import Callable, Iterable, Iterator
 
 import httpx
 
 from axiom import config, db
+
+
+def make_venue_filter(patterns: list[str] | None) -> Callable[[dict], bool] | None:
+    """Build a predicate: keep a raw OpenAlex work iff its venue display_name
+    contains one of `patterns` (case-insensitive substring). None => keep all."""
+    if not patterns:
+        return None
+    pats = [p.lower() for p in patterns]
+
+    def keep(work: dict) -> bool:
+        source = ((work.get("primary_location") or {}).get("source") or {})
+        name = (source.get("display_name") or "").lower()
+        return any(p in name for p in pats)
+
+    return keep
 
 
 # ---------------------------------------------------------------------------
@@ -148,13 +163,18 @@ class OpenAlexClient:
             try:
                 resp = self._client.get(path, params=params)
                 if resp.status_code == 429:               # rate limited — back off
-                    time.sleep(2 ** attempt)
+                    # Honour Retry-After when present; else exponential backoff
+                    # capped so a sustained throttle waits patiently, not forever.
+                    retry_after = resp.headers.get("retry-after")
+                    delay = (float(retry_after) if retry_after
+                             else min(2 ** attempt, config.OPENALEX_BACKOFF_CAP))
+                    time.sleep(delay)
                     continue
                 resp.raise_for_status()
                 return resp.json()
             except (httpx.HTTPError,) as exc:
                 last_exc = exc
-                time.sleep(2 ** attempt)
+                time.sleep(min(2 ** attempt, config.OPENALEX_BACKOFF_CAP))
         raise RuntimeError(f"OpenAlex GET {path} failed after retries") from last_exc
 
     def search_seeds(self, query: str, count: int) -> list[dict]:
@@ -172,15 +192,23 @@ class OpenAlexClient:
         })
         return data.get("results", [])[:count]
 
-    def works_by_ids(self, ids: list[str]) -> list[dict]:
-        """Fetch metadata for specific works via an OR filter on openalex_id."""
+    def works_by_ids(self, ids: list[str], log=print) -> list[dict]:
+        """Fetch metadata for specific works via an OR filter on openalex_id.
+
+        A single batch failing (transient OpenAlex 5xx / rate-limit) skips that
+        batch rather than aborting a long snowball — partial metadata is fine.
+        """
         out: list[dict] = []
         for batch in _chunked(ids, config.OPENALEX_BATCH_SIZE):
-            data = self._get("/works", {
-                "filter": "openalex_id:" + "|".join(batch),
-                "per-page": len(batch),
-                "select": _WORK_FIELDS,
-            })
+            try:
+                data = self._get("/works", {
+                    "filter": "openalex_id:" + "|".join(batch),
+                    "per-page": len(batch),
+                    "select": _WORK_FIELDS,
+                })
+            except RuntimeError as exc:
+                log(f"[ingest] works_by_ids batch skipped: {exc}")
+                continue
             out.extend(data.get("results", []))
         return out
 
@@ -205,6 +233,7 @@ def snowball(
     target: int | None = None,
     seed_count: int | None = None,
     citers_per_seed: int | None = None,
+    keep: Callable[[dict], bool] | None = None,
     log=print,
 ) -> dict[str, dict]:
     """Return {short_id: raw_work} for a connected ~`target`-paper neighborhood.
@@ -214,18 +243,29 @@ def snowball(
          referenced (co-citation frequency) — central papers rank highest.
       2. Pull citers of frontier papers (already-fetched metadata, free edges).
       3. Fetch metadata for the top cited candidates until we reach `target`.
+
+    `keep`: optional predicate on a raw work — only works it accepts are admitted
+    to the corpus (e.g. a venue allow-list). Because the frontier only ever grows
+    from admitted papers, a strict filter terminates early (under `target`) rather
+    than looping forever; it never drifts off-topic.
     """
     seed_query = seed_query or config.SEED_QUERY
     target = target or config.CORPUS_TARGET
     seed_count = seed_count or config.SEED_COUNT
     citers_per_seed = citers_per_seed if citers_per_seed is not None else config.CITERS_PER_SEED
+    filtering = keep is not None
+    keep = keep or (lambda _w: True)
 
     works: dict[str, dict] = {}
-    seeds = client.search_seeds(seed_query, seed_count)
-    for w in seeds:
+    # When filtering, most search hits are off-venue, so cast a wider seed net
+    # (OpenAlex caps per-page at 200) and keep only the matching ones.
+    seed_fetch = max(seed_count * 4, 200) if filtering else seed_count
+    for w in client.search_seeds(seed_query, seed_fetch):
         sid = short_id(w.get("id"))
-        if sid:
+        if sid and sid not in works and keep(w):
             works[sid] = w
+            if len(works) >= seed_count:
+                break
     log(f"[ingest] {len(works)} seeds for query={seed_query!r}")
 
     frontier = list(works.keys())
@@ -234,13 +274,21 @@ def snowball(
         hop += 1
         next_frontier: list[str] = []
 
-        # 1. citers of frontier papers (capped) — adds citer->frontier edges.
-        for sid in frontier:
+        # 1. citers of frontier papers — adds citer->frontier edges. One request
+        # per frontier paper, so a growing frontier explodes request count; cap
+        # how many we expand per hop to keep runtime bounded (the rest still feed
+        # the co-citation step below).
+        for sid in frontier[:config.SNOWBALL_MAX_CITERS_PER_HOP]:
             if len(works) >= target:
                 break
-            for w in client.citers(sid, citers_per_seed):
+            try:
+                citers = client.citers(sid, citers_per_seed)
+            except RuntimeError as exc:
+                log(f"[ingest] citers({sid}) skipped: {exc}")
+                continue
+            for w in citers:
                 cid = short_id(w.get("id"))
-                if cid and cid not in works:
+                if cid and cid not in works and keep(w):
                     works[cid] = w
                     next_frontier.append(cid)
                     if len(works) >= target:
@@ -256,12 +304,15 @@ def snowball(
 
         need = target - len(works)
         if need > 0 and cited_freq:
-            to_fetch = [rid for rid, _ in cited_freq.most_common(need)]
-            for w in client.works_by_ids(to_fetch):
+            # Over-fetch candidates since many will be filtered out by venue.
+            to_fetch = [rid for rid, _ in cited_freq.most_common(need * 4)]
+            for w in client.works_by_ids(to_fetch, log=log):
                 wid = short_id(w.get("id"))
-                if wid and wid not in works:
+                if wid and wid not in works and keep(w):
                     works[wid] = w
                     next_frontier.append(wid)
+                    if len(works) >= target:
+                        break
 
         log(f"[ingest] hop {hop}: corpus={len(works)} (+{len(next_frontier)})")
         frontier = next_frontier
