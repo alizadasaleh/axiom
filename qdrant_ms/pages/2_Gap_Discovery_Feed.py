@@ -1,8 +1,7 @@
 import streamlit as st
 import numpy as np
 import random
-from qdrant_client import QdrantClient
-from qdrant import init_connections, COLLECTION_NAME
+from qdrant_utils import init_connections, COLLECTION_NAME
 
 # -----------------------------------------------------------------------------
 # CONFIGURATION & INITIALIZATION
