@@ -1,0 +1,8 @@
+[tool.pytest.ini_options]
+# The repo is intentionally non-packaged (modules imported via repo-root sys.path,
+# same as app/streamlit_app.py and api/main.py do at runtime). `pythonpath = ["."]`
+# reproduces that for the test process so `from axiom import ...` / `import api.main`
+# resolve without an install step.
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"

@@ -1,0 +1,166 @@
+{
+  "_provenance": "SINGLE-PASS, AI-DRAFTED relevance judgments, NOT human-reviewed. Backlog Task 8.2 specifies '20 queries, 2 annotators' -- this is a first-pass draft against the real eval corpus (data/eval.db, collection axiom_eval_v1, sampled from data/FULL_DATASET.jsonl via scripts/ingest_eval_corpus.py --seed 42) built by reading actual sampled paper titles (not guessed blind), grading relevance 0-3 (3=exact topic match, 2=clearly relevant, 1=marginally/tangentially related). Papers not listed are implicitly relevance 0. Treat nDCG@10 numbers from this file as a working demo signal, not a validated quality claim -- see docs/DECISIONS.md OD11.",
+  "queries": [
+    {
+      "query": "retrieval-augmented generation for question answering",
+      "judgments": {
+        "2024.acl-long.397": 3,
+        "2024.naacl-long.389": 3,
+        "2025.naacl-long.151": 2,
+        "gXq1cwkUZc": 2,
+        "2021.naacl-main.47": 2,
+        "2025.findings-naacl.30": 1
+      }
+    },
+    {
+      "query": "parameter-efficient fine-tuning with low-rank adapters",
+      "judgments": {
+        "2023.findings-acl.476": 3,
+        "2025.findings-acl.68": 3,
+        "2024.findings-acl.310": 3,
+        "2025.coling-main.568": 3,
+        "2024.lrec-main.945": 2
+      }
+    },
+    {
+      "query": "detecting and mitigating hallucination in large language models",
+      "judgments": {
+        "2025.findings-acl.211": 3,
+        "2024.emnlp-main.155": 3,
+        "2025.coling-main.347": 3,
+        "2025.acl-long.770": 2,
+        "2024.lrec-main.423": 2,
+        "2024.findings-acl.377": 1,
+        "u9Fvsy8Brx": 1
+      }
+    },
+    {
+      "query": "chain-of-thought prompting for reasoning in large language models",
+      "judgments": {
+        "v6VbokqzvP": 3,
+        "2025.findings-acl.956": 3,
+        "2024.acl-long.720": 3,
+        "43SOcneD8W": 2,
+        "2024.lrec-main.81": 2,
+        "2024.emnlp-main.837": 1,
+        "gAzBhetShk": 1
+      }
+    },
+    {
+      "query": "named entity recognition with limited labeled data",
+      "judgments": {
+        "2020.coling-main.343": 3,
+        "2024.findings-naacl.14": 3,
+        "2022.naacl-main.156": 2,
+        "tquKyw04gE": 2,
+        "2022.findings-acl.9": 1,
+        "2021.acl-long.63": 1
+      }
+    },
+    {
+      "query": "low-resource and multilingual machine translation",
+      "judgments": {
+        "2022.coling-1.458": 3,
+        "2024.lrec-main.1033": 3,
+        "2025.coling-main.241": 2,
+        "2020.coling-main.521": 1,
+        "2021.naacl-industry.14": 1
+      }
+    },
+    {
+      "query": "abstractive text summarization",
+      "judgments": {
+        "2021.naacl-main.109": 3,
+        "2022.coling-1.259": 2,
+        "2021.emnlp-main.528": 2,
+        "2023.findings-acl.268": 2,
+        "2024.naacl-long.371": 2,
+        "2025.coling-main.204": 1
+      }
+    },
+    {
+      "query": "open-domain question answering with dense retrieval",
+      "judgments": {
+        "2023.findings-acl.263": 3,
+        "2021.naacl-main.47": 2,
+        "2021.emnlp-main.495": 2,
+        "2024.acl-long.397": 2,
+        "2025.coling-main.469": 1
+      }
+    },
+    {
+      "query": "instruction tuning for large language models",
+      "judgments": {
+        "2024.findings-acl.766": 3,
+        "2024.naacl-long.421": 3,
+        "2025.findings-acl.1232": 3,
+        "hInB4JIQ5P": 2,
+        "O7eKiJpePJ": 2,
+        "2024.naacl-long.374": 1
+      }
+    },
+    {
+      "query": "bias and fairness evaluation in language models",
+      "judgments": {
+        "2025.coling-main.202": 3,
+        "2025.findings-naacl.199": 3,
+        "2022.acl-long.583": 3,
+        "2022.naacl-main.431": 2,
+        "2024.emnlp-industry.16": 2,
+        "2021.naacl-main.299": 1
+      }
+    },
+    {
+      "query": "task-oriented dialogue state tracking",
+      "judgments": {
+        "2022.emnlp-main.56": 3,
+        "2021.naacl-main.448": 3,
+        "2022.findings-emnlp.533": 2,
+        "2022.naacl-main.87": 1,
+        "2022.emnlp-main.177": 1
+      }
+    },
+    {
+      "query": "knowledge distillation for compact and efficient models",
+      "judgments": {
+        "2022.naacl-main.169": 3,
+        "5nHLFcj7Y9": 2,
+        "2021.acl-long.421": 2,
+        "2021.naacl-main.56": 2,
+        "alxWMBcNVN": 2,
+        "2025.acl-long.1081": 2
+      }
+    },
+    {
+      "query": "aspect-based sentiment analysis",
+      "judgments": {
+        "2024.lrec-main.902": 3,
+        "2021.findings-emnlp.390": 3,
+        "2022.coling-1.599": 3,
+        "2022.naacl-main.115": 3,
+        "2024.lrec-main.56": 3,
+        "2021.naacl-main.227": 2
+      }
+    },
+    {
+      "query": "few-shot text classification",
+      "judgments": {
+        "2023.acl-long.617": 3,
+        "2022.coling-1.180": 3,
+        "2022.naacl-main.399": 2,
+        "2025.findings-naacl.359": 1,
+        "2020.coling-industry.22": 1
+      }
+    },
+    {
+      "query": "cross-lingual and multilingual representation learning",
+      "judgments": {
+        "2022.acl-long.70": 3,
+        "2022.coling-1.458": 2,
+        "u9Fvsy8Brx": 2,
+        "2021.naacl-industry.19": 1,
+        "tquKyw04gE": 1
+      }
+    }
+  ]
+}

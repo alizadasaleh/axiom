@@ -1,8 +1,18 @@
-streamlit
-numpy
-pandas
-qdrant-client
+# Axiom P1 — pinned, minimal. Everything runs locally and free.
+torch==2.2.2
+transformers==4.40.2
+qdrant-client==1.9.0
+httpx==0.27.0
+networkx==3.6.1
+streamlit==1.37.0
+pillow==10.4.0
+pandas==2.2.2
+numpy==1.26.4
+tqdm==4.66.4
+
+# PBI 6 — FastAPI service layer (REST seam for React, OD12)
+fastapi==0.111.0
+uvicorn==0.29.0
 sentence-transformers
 scikit-learn
 plotly
-tqdm

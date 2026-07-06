@@ -1,0 +1,110 @@
+-- ============================================================================
+-- AXIOM SHARED DATA CONTRACT — db/schema.sql
+--
+-- This schema is the contract the WHOLE TEAM codes against (data, graph, UI).
+-- Any change to it MUST be recorded in docs/DECISIONS.md before being merged,
+-- because downstream tracks (ingestion, velocity, citation graph, Streamlit)
+-- all depend on these exact table and column names.
+--
+-- Source of truth: OpenAlex.
+-- IMPORTANT: OpenAlex stores abstracts as an inverted index. They MUST be
+-- reconstructed into plain text before insertion into papers.abstract here.
+-- ============================================================================
+
+PRAGMA foreign_keys = ON;
+
+-- One row per paper (abstract-level unit; also the unit for one Qdrant point).
+CREATE TABLE IF NOT EXISTS papers (
+    openalex_id      TEXT PRIMARY KEY,   -- e.g. "W2741809807"
+    title            TEXT,
+    abstract         TEXT,               -- reconstructed PLAIN TEXT (not inverted index)
+    publication_year INTEGER,
+    venue_id         TEXT,               -- OpenAlex source/venue id
+    venue            TEXT,               -- human-readable venue name
+    cited_by_count   INTEGER DEFAULT 0,
+    doi              TEXT
+);
+
+-- Many concepts per paper (OpenAlex concepts/topics). Many-to-one to papers.
+CREATE TABLE IF NOT EXISTS concepts (
+    paper_id TEXT NOT NULL,              -- FK -> papers.openalex_id
+    concept  TEXT NOT NULL,
+    level    INTEGER,                    -- OpenAlex concept level (0 = broad)
+    FOREIGN KEY (paper_id) REFERENCES papers(openalex_id)
+);
+
+-- Citation edges built from each paper's referenced_works[].
+-- Present now, consumed in P2 by the NetworkX graph track (decision OD6).
+CREATE TABLE IF NOT EXISTS citation_edges (
+    src_id TEXT NOT NULL,                -- citing paper (owner of referenced_works)
+    dst_id TEXT NOT NULL,                -- cited paper
+    year   INTEGER,                      -- citing paper's publication_year
+    FOREIGN KEY (src_id) REFERENCES papers(openalex_id)
+    -- NOTE: NO foreign key on dst_id by design. referenced_works[] routinely
+    -- points at papers outside the local corpus; the graph track needs these
+    -- dangling edges, so we must not reject them.
+);
+
+-- Provenance / fetch bookkeeping. One row per paper.
+CREATE TABLE IF NOT EXISTS paper_provenance (
+    paper_id     TEXT PRIMARY KEY,       -- FK -> papers.openalex_id
+    source       TEXT,                   -- e.g. "openalex", "synthetic"
+    fetched_at   DATETIME,
+    text_hash    TEXT,                   -- hash of abstract for dedup/change detection
+    has_fulltext BOOLEAN DEFAULT FALSE,
+    FOREIGN KEY (paper_id) REFERENCES papers(openalex_id)
+);
+
+-- Canonical concept-label mapping (Task 3.2, OD14). LLM-merged synonyms
+-- (e.g. "LoRA" / "Low-Rank Adaptation") persisted so canonicalization runs
+-- once per corpus, not per query. `source='manual'` rows are a hand-set
+-- override: re-running canonicalize.py never touches them.
+CREATE TABLE IF NOT EXISTS concept_canonical (
+    concept   TEXT PRIMARY KEY,          -- raw OpenAlex concept label
+    canonical TEXT NOT NULL,             -- canonical label this concept maps to
+    source    TEXT NOT NULL DEFAULT 'auto'   -- 'auto' (LLM) or 'manual' (override)
+);
+
+-- Cached 3-bullet paper summaries (Task 7.4, OD14). Computed once per paper on
+-- request (LLM call is the slow part); re-summarize with force=true to refresh.
+CREATE TABLE IF NOT EXISTS paper_summaries (
+    paper_id     TEXT PRIMARY KEY,       -- FK -> papers.openalex_id
+    bullets_json TEXT NOT NULL,          -- JSON list[str], exactly 3 bullets
+    model        TEXT NOT NULL,          -- which Ollama model produced it
+    created_at   DATETIME NOT NULL,
+    FOREIGN KEY (paper_id) REFERENCES papers(openalex_id)
+);
+
+-- HITL review queue (Task 5.2, OD16). One row per generated hypothesis
+-- pitch; no candidate is ever auto-promoted -- `status` only changes via an
+-- explicit approve/reject action (never automatically).
+CREATE TABLE IF NOT EXISTS review_queue (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    gap_a_label          TEXT NOT NULL,
+    gap_b_label          TEXT NOT NULL,
+    title                TEXT NOT NULL,
+    claim                TEXT NOT NULL,
+    method_sketch        TEXT NOT NULL,
+    datasets_json        TEXT NOT NULL,   -- JSON list[str]
+    supporting_ids_json  TEXT NOT NULL,   -- JSON list[str]
+    status               TEXT NOT NULL DEFAULT 'pending',  -- pending | approved | rejected
+    created_at           DATETIME NOT NULL
+);
+
+-- Bookmarked papers (Task 7.4, OD13). Single-user demo, no auth system exists,
+-- so no user_id column — one shared reading list. Summaries are intentionally
+-- NOT stored here: 3-bullet LLM summaries (axiom/summarize.py, OD14) are cached
+-- per-paper in paper_summaries above, keyed by paper_id, so they survive
+-- un-bookmarking and are shared with any future consumer.
+CREATE TABLE IF NOT EXISTS reading_list (
+    paper_id TEXT PRIMARY KEY,           -- FK -> papers.openalex_id
+    added_at DATETIME NOT NULL,
+    FOREIGN KEY (paper_id) REFERENCES papers(openalex_id)
+);
+
+-- Read-path indexes for the UI filter bar and the P2 graph track.
+CREATE INDEX IF NOT EXISTS idx_papers_year    ON papers(publication_year);
+CREATE INDEX IF NOT EXISTS idx_papers_venue   ON papers(venue);
+CREATE INDEX IF NOT EXISTS idx_concepts_paper ON concepts(paper_id);
+CREATE INDEX IF NOT EXISTS idx_edges_src      ON citation_edges(src_id);
+CREATE INDEX IF NOT EXISTS idx_edges_dst      ON citation_edges(dst_id);

@@ -1,0 +1,181 @@
+"""Central configuration for Axiom P1.
+
+Single source of truth for paths, Qdrant connection, collection name, and the
+embedding model id. Every other module imports from here so there are no magic
+strings scattered across the codebase.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+# --- Paths -------------------------------------------------------------------
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DB_PATH = PROJECT_ROOT / "data" / "axiom.db"
+SCHEMA_PATH = PROJECT_ROOT / "db" / "schema.sql"
+
+# --- Qdrant ------------------------------------------------------------------
+QDRANT_HOST = "localhost"
+QDRANT_PORT = 6333
+# Versioned collection name: bump the suffix when the embedding model or vector
+# dimensionality changes so old/new points never mix.
+COLLECTION_NAME = "axiom_v1"
+
+# --- OpenAlex ingestion ------------------------------------------------------
+# Source of truth (decision: Data layer = OpenAlex -> SQLite). No API key needed;
+# OpenAlex asks only for a `mailto` to join the faster "polite pool".
+#
+# Corpus is built by SNOWBALL / 2-hop expansion (decision OD7): seed on a topic,
+# then pull in the papers the seeds cite (referenced_works[]) AND papers that
+# cite the seeds. This densifies *internal* citation edges so the graph is
+# actually connected, instead of a star of dangling external edges.
+OPENALEX_BASE = "https://api.openalex.org"
+OPENALEX_MAILTO = "yakub.yakubov.business@gmail.com"   # polite-pool contact
+OPENALEX_TIMEOUT = 30.0                                 # per-request seconds
+OPENALEX_MAX_RETRIES = 6                                # transient-error retries (rides out 429 throttles)
+OPENALEX_BACKOFF_CAP = 30.0                             # max seconds between retries
+
+SEED_QUERY = "retrieval-augmented generation"           # default seed topic
+SEED_COUNT = 50                                         # most-cited seeds to start
+CORPUS_TARGET = 500                                     # snowball stops at ~this many papers
+CITERS_PER_SEED = 25                                    # capped citers pulled per seed (per hop)
+OPENALEX_BATCH_SIZE = 50                                # ids per `openalex_id:a|b|...` fetch
+SNOWBALL_MAX_CITERS_PER_HOP = 300                       # cap citer-expansion calls/hop (bounds runtime)
+
+# Venue allow-list for the snowball (case-insensitive substring match on the
+# OpenAlex source display_name). A topic snowball drifts far off-seed via citers
+# and cited works (a RAG seed pulls in clinical-trial and manufacturing papers),
+# which floods gap/velocity analysis with irrelevant industries. When active,
+# only papers whose venue matches one of these patterns are admitted, keeping the
+# corpus in the NLP/ML world the project targets (ACL Anthology + top ML venues).
+RELEVANT_VENUE_PATTERNS = [
+    "computational linguistics",                    # ACL, NAACL, EACL, COLING, TACL, Findings, CL journal
+    "empirical methods in natural language",        # EMNLP
+    "neural information processing systems",        # NeurIPS
+    "learning representations",                     # ICLR
+    "international conference on machine learning",  # ICML
+    "aaai",                                          # AAAI
+]
+
+# --- Embeddings --------------------------------------------------------------
+# Committed team decision: SPECTER2, 768-dim. Do NOT silently swap models.
+MODEL_ID = "allenai/specter2_base"
+VECTOR_SIZE = 768
+
+# Default search fan-out.
+DEFAULT_TOP_K = 10
+
+# --- Query-side embedding ----------------------------------------------------
+# Terse queries ("LoRA", "TOOLS for AI") embed poorly when treated as documents
+# and land in a mushy region of the space (flat ~0.82-0.88 scores). Two paths
+# nudge the query vector toward the document region:
+#   - "adapter":   SPECTER2 ad-hoc query adapter. Best, BUT the `adapters` lib
+#                  pins transformers~=4.57, conflicting with our pinned 4.40.2,
+#                  so it is unavailable without a committed-decision pin bump.
+#   - "expansion": wrap the terse query in an abstract-shaped sentence. No new
+#                  deps; works under the current pins. This is the active path.
+QUERY_EXPANSION_TEMPLATE = "This paper presents {query} for natural language processing."
+
+# --- Hybrid retrieval (dense + sparse) ---------------------------------------
+# Dense SPECTER2 captures meaning; a sparse BM25-style vector captures exact
+# terms/acronyms (LoRA, RAG, dataset names) that dense misses. Each point stores
+# two named vectors; results are fused with Reciprocal Rank Fusion.
+#
+# NOTE: qdrant-client==1.9.0 has sparse vectors but NOT the Query-API fusion
+# primitives (Prefetch/FusionQuery, client >= 1.10). We therefore run two native
+# searches and fuse with RRF in Python — no pin bump required.
+DENSE_VECTOR_NAME = "dense"
+SPARSE_VECTOR_NAME = "sparse"
+SPARSE_VOCAB_SIZE = 2 ** 20      # hashing-trick index space (fits uint32)
+BM25_K1 = 1.5                    # BM25 term-frequency saturation
+BM25_B = 0.75                    # BM25 length normalization
+RRF_K = 60                       # reciprocal-rank-fusion constant
+HYBRID_CANDIDATES = 20           # candidates pulled from each arm before fusion
+# Tiny stopword set so terse keyword queries aren't dominated by glue words.
+SPARSE_STOPWORDS = frozenset({
+    "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with",
+    "is", "are", "be", "by", "as", "at", "that", "this", "from", "how",
+})
+
+# --- Trends / velocity --------------------------------------------------------
+# No PROJECT_PLAN.md exists in this repo (decision OD10) so there is no formula
+# to inherit; velocity is computed on-demand (no persisted KEYWORD table) as a
+# two-window normalized-frequency log2-ratio. See axiom/velocity.py.
+VELOCITY_MIN_CONCEPT_LEVEL = 1   # drop level-0 concepts (e.g. "Computer science") — too broad to trend
+VELOCITY_MIN_FREQ = 5            # recent_count below this => low_confidence flag
+VELOCITY_TOP_K = 50              # default keywords returned by get_top_velocity_keywords
+VELOCITY_EPSILON = 1e-4          # smoothing so the log2 ratio never blows up on a 0 count
+# A concept seen in only ONE paper in a window isn't a trend — its velocity pins
+# to the epsilon ceiling (every 0->1 concept ties at the same value), so the
+# Trending charts would show a flat wall of identical bars. Require at least this
+# many papers in the window a concept is moving from/to before charting it; the
+# full ranked list below the charts still shows everything, low-volume flagged.
+VELOCITY_MIN_CHART_COUNT = 2
+
+# Floor for the Trending tab's year filter. Snowball ingestion drags in cited
+# references back decades, so the full span (e.g. 1975-2026) splits into a
+# near-empty pre-2000 "prior" window and a huge "recent" one, making almost every
+# concept a fake 0->N riser. We clamp the selectable "From year" to this floor so
+# velocity is only ever computed over the modern, densely-populated years.
+VELOCITY_MIN_YEAR = 2020
+
+# --- Eval corpus (OD11, PBI 8 / Task 8.2) -------------------------------------
+# Real ACL/EMNLP/COLING/NAACL corpus (2020-2025, ~23k papers), pulled from the
+# team's `main` branch for retrieval eval only. Kept in a SEPARATE SQLite db +
+# Qdrant collection from the gaps/velocity corpus (data/axiom.db, axiom_v1):
+# this dataset has no citation edges and no concept/keyword tags, so it cannot
+# feed OD9 gap detection or the OD10 velocity engine — only search/nDCG@10 eval.
+EVAL_DATASET_PATH = PROJECT_ROOT / "data" / "FULL_DATASET.jsonl"
+EVAL_DB_PATH = PROJECT_ROOT / "data" / "eval.db"
+EVAL_COLLECTION_NAME = "axiom_eval_v1"
+EVAL_SAMPLE_SIZE = 1500          # stratified across (venue, year) buckets
+
+# --- Composite gap G-score + threshold calibration (OD17, PBI 8 / Task 8.1) ---
+# OD16 deferred a composite G-score for lack of a formula to calibrate. OD17
+# reverses that now that a calibration scaffold exists (scripts/export_gap_labels
+# + scripts/calibrate_gap_thresholds): G blends four normalized signals already
+# on the OD9 gap candidates. These weights and τ are UNCALIBRATED DEFAULTS — the
+# calibration script overwrites eval/calibration.json from human labels, and
+# load_calibration() below prefers that file when present.
+G_SCORE_WEIGHTS = {
+    "similarity":    0.4,   # centroid cosine — how topically related the two clusters are
+    "disconnection": 0.3,   # 1/(1+inter_citations) — how weakly they cite each other
+    "velocity":      0.2,   # logistic of mean concept velocity — how "hot" the region is
+    "authority":     0.1,   # normalized mean log(cited_by) — how substantial the clusters are
+}
+GAP_TAU_DEFAULT = 0.65      # G >= τ flags a candidate "meets threshold" (dev default, uncalibrated)
+CALIBRATION_PATH = PROJECT_ROOT / "eval" / "calibration.json"
+
+
+def load_calibration() -> dict:
+    """Return {'tau': float, 'weights': {...}}, calibrated file merged over defaults.
+
+    Reads eval/calibration.json (written by scripts/calibrate_gap_thresholds.py)
+    when it exists and parses; otherwise — or on any malformed file — falls back
+    to the uncalibrated defaults so gap ranking always works pre-calibration.
+    """
+    tau = GAP_TAU_DEFAULT
+    weights = dict(G_SCORE_WEIGHTS)
+    try:
+        data = json.loads(CALIBRATION_PATH.read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError, OSError):
+        return {"tau": tau, "weights": weights}
+    if isinstance(data.get("tau"), (int, float)):
+        tau = float(data["tau"])
+    if isinstance(data.get("weights"), dict):
+        weights.update({k: float(v) for k, v in data["weights"].items()
+                        if k in weights and isinstance(v, (int, float))})
+    return {"tau": tau, "weights": weights}
+
+
+# --- API (PBI 6, OD12) --------------------------------------------------------
+# CORS allowlist for local React dev servers (Vite default 5173, CRA default 3000).
+CORS_ORIGINS = ["http://localhost:3000", "http://localhost:5173"]
+
+# --- Local LLM via Ollama (OD14) ----------------------------------------------
+# No API key, no cost -- runs on this machine. Unblocks T3.2 (keyword
+# canonicalization) and reading-list summaries (T7.4); PBI 5's hypothesis
+# pipeline will use the same client later.
+OLLAMA_HOST = "http://localhost:11434"
+OLLAMA_MODEL = "qwen2.5:7b"        # good instruction-following/JSON at 7B, fast locally
+OLLAMA_TIMEOUT = 120.0

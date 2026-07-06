@@ -1,0 +1,15 @@
+# Test-only dependencies. Two supported environments:
+#
+#   1. The project .venv (Python 3.10-3.12, full requirements.txt installed):
+#      just add pytest — torch/transformers/qdrant-client/streamlit are already there.
+#   2. A bare Python 3.13/3.14 env WITHOUT the ML stack (the pinned torch/
+#      transformers have no wheels there): tests/conftest.py stubs the missing
+#      torch/transformers/qdrant_client modules so the suite still runs.
+#
+# Versions float on purpose: the prod pins (torch==2.2.2, numpy==1.26.4, ...)
+# can't install on 3.14, and the tests only need import-compatible builds.
+pytest>=8
+httpx>=0.27
+fastapi>=0.111
+networkx>=3.2
+numpy>=1.26
