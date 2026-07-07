@@ -300,7 +300,7 @@ def render_search() -> None:
 
 # --- Citation-graph tab ------------------------------------------------------
 _GRAPH3D_TEMPLATE = """
-<div id="graph3d" style="width:100%;height:HEIGHTpx;background:#0b0f19;border-radius:10px;"></div>
+<div id="graph3d" style="width:100%;height:HEIGHTpx;background:#f4f6fb;border-radius:10px;"></div>
 <script src="https://unpkg.com/3d-force-graph@1.73.4/dist/3d-force-graph.min.js" integrity="sha384-GNPicn8pBA2/PGSyPTpxIlPurgLUYcNYJ2zskIq782dE9+gp5E32WSyuxZqA7J+u" crossorigin="anonymous"></script>
 <script>
 (function () {
@@ -320,7 +320,7 @@ _GRAPH3D_TEMPLATE = """
       dark:  { bg: '#0b0f19', link: 'rgba(205,222,248,0.85)', arrow: 'rgba(220,230,250,0.8)', particle: '#ffd43b' },
       light: { bg: '#f4f6fb', link: 'rgba(60,72,95,0.7)',     arrow: 'rgba(45,55,75,0.75)',   particle: '#e8590c' }
     };
-    var theme = THEMES.dark;
+    var theme = THEMES.light;
     var Graph = ForceGraph3D()(el)
       .width(el.clientWidth || 800)
       .height(HEIGHT)
@@ -392,13 +392,13 @@ _GRAPH3D_TEMPLATE = """
     bar.appendChild(mkBtn('+', function () { dolly(0.8); }));
     bar.appendChild(mkBtn('–', function () { dolly(1.25); }));
     bar.appendChild(mkBtn('▣', function () { try { Graph.zoomToFit(400, 30); } catch (e) {} }));
-    var themeBtn = mkBtn('☀', function () {
-      var light = theme === THEMES.dark;
-      applyTheme(light ? THEMES.light : THEMES.dark);
-      themeBtn.textContent = light ? '🌙' : '☀';
-      themeBtn.title = light ? 'Switch to dark background' : 'Switch to light background';
+    var themeBtn = mkBtn('🌙', function () {
+      var dark = theme === THEMES.light;
+      applyTheme(dark ? THEMES.dark : THEMES.light);
+      themeBtn.textContent = dark ? '☀' : '🌙';
+      themeBtn.title = dark ? 'Switch to light background' : 'Switch to dark background';
     });
-    themeBtn.title = 'Switch to light background';
+    themeBtn.title = 'Switch to dark background';
     bar.appendChild(themeBtn);
     el.appendChild(bar);
 
