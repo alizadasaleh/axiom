@@ -1,12 +1,17 @@
 # qdrant_ms — Lightweight Qdrant Prototype
 
+> **Integration status:** the pages in this directory are now available as the
+> **🔗 Vector tools** tab inside the main UI (`streamlit run app/streamlit_app.py`).
+> The standalone entry point below is retained for development and debugging.
+> Both the standalone app and the main UI read the same `axiom_v1` collection.
+
 A focused Streamlit + Qdrant app for exploring the paper corpus by semantic
-proximity. It reads the **live `academic_papers` collection** as populated by the
+proximity. It reads the **live `axiom_v1` collection** as populated by the
 Axiom platform pipeline, so it works directly on the real data:
 
 | Aspect       | Value                                                         |
 |--------------|---------------------------------------------------------------|
-| Collection   | `academic_papers`                                             |
+| Collection   | `axiom_v1` (unified with main platform; was `academic_papers`) |
 | Vectors      | **named**: `dense` (768-d SPECTER2) + `sparse` (BM25-style)   |
 | Payload      | `paper_id, title, year, venue, cited_by_count, concepts`      |
 | This app uses | the `dense` vector only (semantic proximity)                 |
@@ -43,7 +48,7 @@ qdrant_ms/
 
 ## Run
 
-From the **repo root**, with the `academic_papers` collection already populated:
+From the **repo root**, with the `axiom_v1` collection already populated:
 
 ```bash
 # 1. Start Qdrant (shared with the main platform)

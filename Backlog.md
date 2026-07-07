@@ -8,14 +8,14 @@ Axiom · full product backlog (P1-P4)
 
 ---
 
-## Implementation Status (as of 2026-07-04)
+## Implementation Status (as of 2026-07-07)
 
-> **This backlog is the plan of record and now reflects what is actually built on
-> branch `feat/hybrid-retrieval`.** Where the implementation diverged from the
-> original plan, the task text has been rewritten to the as-built design and the
-> superseded plan is kept inline as a note. Status markers throughout:
-> ✅ Done · ⚠️ Partial / diverged · ❌ Not built. See `docs/DECISIONS.md`
-> (OD6–OD16) and the `docs/21-06.md` work log for rationale.
+> **This backlog is the plan of record for `main` after PR merges #1–#3
+> (platform integration, qdrant restructure, qdrant_ms enhancement).** Where the
+> implementation diverged from the original plan, the task text has been
+> rewritten to the as-built design and the superseded plan is kept inline as a
+> note. Status markers throughout: ✅ Done · ⚠️ Partial / diverged · ❌ Not built.
+> See `docs/DECISIONS.md` (OD6–OD17) and the `docs/21-06.md` work log for rationale.
 
 **Built:** OpenAlex snowball ingest → SQLite → SPECTER2 → Qdrant with **hybrid
 dense+sparse (RRF) retrieval** → **NetworkX** citation graph + PageRank influence
@@ -25,8 +25,10 @@ KEYWORD table) → Streamlit UI (Search tab + 📈 Trending tab + Citation-graph
 with a 3D force-directed viz and a Research-gaps view + 📚 Reading-list tab) →
 **OD11 nDCG@10 eval** against a real ACL/EMNLP/COLING/NAACL corpus →
 **OD12 FastAPI service layer** (`api/main.py`) wrapping search, trends,
-citation graph/gaps, and reading-list bookmarks → **OD13 reading-list
-bookmarks** (SQLite-backed, no LLM summaries).
+citation graph/gaps, reading-list bookmarks, summaries, hypothesis pitches, and
+review queue → **OD13/OD14 reading-list** (SQLite bookmarks + cached Ollama
+summaries) → **secondary toolkit** `qdrant_ms/` (PR #3, 2026-07-07): Paper
+Similarity Analyzer + Gap Discovery Feed on stored Qdrant vectors.
 
 **Diverged from plan:** corpus is **topic-snowball** (500 RAG papers, OD7), not
 ACL-by-venue ≥1k · gap model is **OD9 community-pairs**, replacing the original
@@ -46,8 +48,8 @@ self-report.
 **Still open:** 5k corpus scale-up (T2.3) and threshold calibration +
 gap-quality rating (T8.1/T8.2, both need real human input this project can't
 fabricate). The React migration (PBI 7) is **deliberately deprioritized
-(OD15)**, not just unbuilt — Streamlit is now the final UI, not a
-prototyping shell.
+(OD15)**, not just unbuilt — Streamlit is now the final UI, not a prototyping
+shell.
 
 **PBI 5 is now built, rescoped (OD16):** not the original per-hypothesis
 free-text pipeline (that needs uncalibrated novelty-scoring logic, the same
@@ -110,7 +112,8 @@ Build greenfield from empty repo to full stack: **OpenAlex → SQLite → SPECTE
 | 21 | T8.1 | Calibration notebook (τ, δ_D, δ_F) | T4.4, T5.2 | Yahor | High | ⚠️→ scaffold built (**OD17**): `export_gap_labels.py` → human labels → `calibrate_gap_thresholds.py` → `eval/calibration.json` consumed by `gaps.analyze`; a script (not .ipynb, matching repo discipline); labels still needed |
 | 22 | T8.2 | nDCG@10 + gap quality evaluation | T2.3, T5.2 | All | High | ⚠️→ nDCG@10 built (OD11, single-pass labels, 0.453 hybrid); gap-quality rating still needs human raters |
 | 23 | T8.3 | README runbook + mentor demo package | T7.3, T8.1 | All | High | ✅→ `README.md` rewritten, `docs/demo_examples.md` (real output, incl. a real hypothesis pitch) + a mentor one-pager built; no literal UI screenshots (can't capture a browser session in this environment) |
-| 24 | T1.4 | `docs/DECISIONS.md` | - | Yahor | Medium | ✅ (logs OD6–OD16) |
+| 24 | T1.4 | `docs/DECISIONS.md` | - | Yahor | Medium | ✅ (logs OD6–OD17) |
+| 25 | T7.5 | **qdrant_ms proximity toolkit** (secondary Streamlit app) | T2.2 | Saleh | Medium | ✅ built (PR #3); ✅ collection unified (`axiom_v1`); ✅ integrated into main UI as **🔗 Vector tools** tab (`app/vector_tools.py`); standalone `qdrant_ms/Home.py` retained for dev |
 
 ---
 
@@ -810,6 +813,28 @@ As a mentor or researcher, I want a polished four-page dashboard to explore tren
   claims; every bullet is rendered with its `paper_id` citation in the UI.
 - ✅ Page loads instantly for the current bookmark counts (well under 3s;
   not yet load-tested at 20 bookmarks specifically).
+
+---
+
+## PBI 7b - qdrant_ms Proximity Toolkit (secondary UI)
+
+**Status: ✅ built (PR #3, merged 2026-07-07).** A separate Streamlit app under
+`qdrant_ms/` for vector-space exploration on **pre-stored** Qdrant points (no
+embedding model loaded in the app). Entry: `streamlit run qdrant_ms/Home.py`.
+
+### Delivered
+- **Paper Similarity Analyzer** (`pages/1_Proximity_Analyzer.py`): pairwise
+  cosine similarity, neighbourhood map, bridge papers, shared concepts.
+- **Gap Discovery Feed** (`pages/2_Gap_Discovery_Feed.py`): KMeans topic
+  clustering + bridgeable topic-pair scan with landscape visualization.
+- Shared helpers in `qdrant_utils.py`; legacy CLI scripts moved to
+  `qdrant_ms/scripts/` (reference only).
+
+### Integration (✅ resolved, 2026-07-07)
+- `qdrant_ms/qdrant_utils.py` now reads **`axiom_v1`** (was `academic_papers`).
+- Render functions extracted to `app/vector_tools.py`; integrated as the
+  **🔗 Vector tools** tab in `app/streamlit_app.py`. Single Streamlit process,
+  single collection, single ingest pipeline.
 
 ---
 

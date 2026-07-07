@@ -388,6 +388,34 @@ instead — pure-stdlib, importable, unit-tested (`tests/test_calibrate.py`).
 
 ---
 
+## OD18 — Unified Qdrant collection + dual gap views
+
+**Context.** PR #3 (`qdrant_ms/`) landed with its own Streamlit entry point
+reading a separate `academic_papers` collection. This split the corpus: the main
+platform wrote `axiom_v1`; the toolkit expected `academic_papers`. Users running
+only the main ingest would see an empty qdrant_ms UI.
+
+**Decision (2026-07-07).** Unify on `axiom_v1`:
+- `qdrant_ms/qdrant_utils.py`: `COLLECTION_NAME = "axiom_v1"` (was `"academic_papers"`).
+- `app/vector_tools.py` (new): wraps qdrant_ms page logic as render functions
+  `render_proximity_analyzer` / `render_vector_gap_discovery`, reading from the
+  same `AxiomQdrant.client` used by the rest of the app.
+- `app/streamlit_app.py`: new **🔗 Vector tools** tab (6th tab) calls these
+  render functions, giving one entry point for the whole UI.
+- `qdrant_ms/Home.py` retained as a standalone dev entry point for the qdrant_ms
+  team.
+
+**Dual gap views are both kept, clearly labelled:**
+- 🕸️ *Research gaps* (Citation graph tab) — OD9: Louvain community detection +
+  citation structure + semantic centroids. Citation evidence is the discriminator.
+- 🔗 *Vector Gap Discovery* (Vector tools tab) — KMeans clustering + bridge-paper
+  scan on raw embedding geometry only. Complementary signal, no citation data.
+
+**No schema change.** No new Qdrant collection or SQLite table. The only code
+change to the data path is the collection name constant in `qdrant_utils.py`.
+
+---
+
 ## Schema change log
 
 | Date       | Change                                              | By |

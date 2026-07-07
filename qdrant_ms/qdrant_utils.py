@@ -1,19 +1,22 @@
 """Shared Qdrant helpers for the qdrant_ms Streamlit prototype.
 
-Targets the live `academic_papers` collection as populated by the Axiom
-platform pipeline: NAMED vectors (`dense` 768-d SPECTER2 + `sparse`) and the
-payload schema {paper_id, title, year, venue, cited_by_count, concepts}.
+Targets the live `axiom_v1` collection (same as the main platform) as populated
+by the Axiom pipeline: NAMED vectors (`dense` 768-d SPECTER2 + `sparse`) and
+the payload schema {paper_id, title, year, venue, cited_by_count, concepts}.
 
 The pages only ever *read* stored vectors (they never embed free text), so no
 embedding model is loaded here. Queries use `client.search` with a NamedVector
 because the pinned qdrant-client (1.9.0) has no Query API (`query_points`).
+
+NOTE: collection name was previously hardcoded as `academic_papers`; unified
+with the main platform (`axiom_v1`) so both UIs share a single corpus.
 """
 import numpy as np
 import streamlit as st
 from qdrant_client import QdrantClient
 from qdrant_client.models import NamedVector
 
-COLLECTION_NAME = "academic_papers"
+COLLECTION_NAME = "axiom_v1"   # unified with main platform (was: "academic_papers")
 DENSE_VECTOR_NAME = "dense"
 
 
