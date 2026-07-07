@@ -16,6 +16,8 @@ from pathlib import Path
 
 # Make the repo root importable when Streamlit runs this file directly.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# Make the app/ directory importable so sibling modules (vector_tools) resolve.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import altair as alt
 import networkx as nx
@@ -26,6 +28,7 @@ import streamlit.components.v1 as components
 from axiom import config, db, gaps, graph, hypothesis, llm, summarize, velocity
 from axiom.embed import Specter2Encoder
 from axiom.qdrant_client import AxiomQdrant, SearchHit
+from vector_tools import render_proximity_analyzer, render_vector_gap_discovery
 
 st.set_page_config(page_title="Axiom — Thesis Discovery", layout="wide")
 st.title("Axiom — Research Trends & Gaps Discovery")
@@ -892,9 +895,45 @@ def render_review_queue() -> None:
                         st.rerun()
 
 
+# --- Vector tools tab --------------------------------------------------------
+def render_vector_tools() -> None:
+    """Embedding-geometry analysis: similarity + KMeans gap discovery (PR #3)."""
+    if not qdrant_ok:
+        st.warning(qdrant_msg)
+        return
+
+    st.info(
+        "**Two gap views are available in Axiom:**  \n"
+        "- 🕸️ **Research gaps** (Citation graph tab) — OD9: Louvain community "
+        "detection on the citation graph + semantic centroids + weak-citation "
+        "scoring. Uses citation structure to validate candidate gaps.  \n"
+        "- 🔗 **Vector Gap Discovery** (this tab) — KMeans topic clustering + "
+        "bridge-paper scan on raw embedding geometry only. No citation data used. "
+        "Complementary signal, not a replacement."
+    )
+
+    st.subheader("🔗 Paper Similarity Analyzer")
+    st.caption(
+        "Pick any two papers to measure how close they are in meaning, visualise "
+        "each paper's research neighbourhood, and see what (if anything) currently "
+        "bridges the space between them."
+    )
+    render_proximity_analyzer(store)
+
+    st.divider()
+
+    st.subheader("🕳️ Vector Gap Discovery")
+    st.caption(
+        "Groups every paper into topics (KMeans) and finds pairs of related topics "
+        "with no paper bridging them — the places new research could go."
+    )
+    render_vector_gap_discovery(store)
+
+
 # --- Tab dispatch ------------------------------------------------------------
-tab_graph, tab_trending, tab_search, tab_reading, tab_review = st.tabs(
-    ["🕸️ Citation graph", "📈 Trending", "🔍 Search", "📚 Reading list", "🗂️ Review queue"]
+tab_graph, tab_trending, tab_search, tab_reading, tab_review, tab_vector = st.tabs(
+    ["🕸️ Citation graph", "📈 Trending", "🔍 Search",
+     "📚 Reading list", "🗂️ Review queue", "🔗 Vector tools"]
 )
 with tab_graph:
     render_graph_view()
@@ -906,3 +945,5 @@ with tab_reading:
     render_reading_list()
 with tab_review:
     render_review_queue()
+with tab_vector:
+    render_vector_tools()

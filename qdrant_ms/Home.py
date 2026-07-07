@@ -50,5 +50,7 @@ with c2:
 st.markdown("---")
 st.caption(
     "Requires the Qdrant container (`docker compose up -d qdrant`) with the "
-    "`academic_papers` collection populated. Both tools read the same collection."
+    "`axiom_v1` collection populated (same collection as the main platform). "
+    "These tools are also available as the **🔗 Vector tools** tab in the main UI "
+    "(`streamlit run app/streamlit_app.py`)."
 )
