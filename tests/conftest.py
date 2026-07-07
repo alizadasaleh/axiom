@@ -223,7 +223,7 @@ class FakeStore:
     def search_hybrid(self, *, query_vector, query_text, top_k=10, venues=None, year_range=None):
         return self._hits(top_k)
 
-    def similar_papers(self, paper_id, top_k=10):
+    def similar_papers(self, paper_id, top_k=10, venues=None, year_range=None):
         return self._hits(top_k)
 
 

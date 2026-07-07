@@ -89,9 +89,10 @@ def _get_all_paper_titles(_raw_client) -> list[str]:
         return []
 
 
-def _fetch_paper_by_title(raw_client, title: str):
+@st.cache_data(ttl=60)
+def _fetch_paper_by_title(_raw_client, title: str):
     """Retrieve the full record (dense vector + payload) for an exact title."""
-    records, _ = raw_client.scroll(
+    records, _ = _raw_client.scroll(
         collection_name=config.COLLECTION_NAME,
         scroll_filter=Filter(
             must=[FieldCondition(key="title", match=MatchValue(value=title))]
