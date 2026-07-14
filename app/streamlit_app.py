@@ -10,7 +10,9 @@ Run from the repo root:
 """
 from __future__ import annotations
 
+import html
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -27,11 +29,215 @@ from axiom import config, db, gaps, graph, hypothesis, llm, summarize, velocity
 from axiom.embed import Specter2Encoder
 from axiom.qdrant_client import AxiomQdrant, SearchHit
 
-st.set_page_config(page_title="Axiom — Thesis Discovery", layout="wide")
-st.title("Axiom — Research Trends & Gaps Discovery")
-st.caption(
-    f"Collection `{config.COLLECTION_NAME}` · model `{config.MODEL_ID}` · "
-    "ACL Anthology corpus (ACL/EMNLP/COLING/NAACL, 2020–2025)"
+st.set_page_config(
+    page_title="Axiom · Thesis Discovery",
+    page_icon="🔭",
+    layout="wide",
+)
+
+
+# --- Visual polish -----------------------------------------------------------
+# Streamlit's defaults are functional but plain; the theme in
+# .streamlit/config.toml sets the palette, and this stylesheet handles the
+# things config can't reach — the hero, pill tabs, card-like expanders/metrics,
+# chips, and spacing. Injected once per run.
+_CSS = """
+<style>
+:root {
+  --ax-accent: #5b8cff;
+  --ax-accent-soft: rgba(91,140,255,0.14);
+  --ax-panel: #151b2b;
+  --ax-panel-2: #1b2334;
+  --ax-border: rgba(146,164,205,0.18);
+  --ax-border-strong: rgba(146,164,205,0.32);
+  --ax-muted: #93a0b8;
+}
+
+/* Tighter, centered content column. */
+.block-container { padding-top: 2.2rem; padding-bottom: 4rem; max-width: 1180px; }
+
+/* --- Hero ----------------------------------------------------------------- */
+.ax-hero {
+  display: flex; align-items: center; gap: 16px;
+  padding: 22px 26px; margin-bottom: 6px;
+  border: 1px solid var(--ax-border);
+  border-radius: 16px;
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(91,140,255,0.16) 0%, rgba(91,140,255,0) 55%),
+    linear-gradient(180deg, #131a29 0%, #0e1420 100%);
+}
+.ax-hero .ax-mark {
+  font-size: 34px; line-height: 1;
+  width: 58px; height: 58px; flex: none;
+  display: grid; place-items: center;
+  border-radius: 14px;
+  background: var(--ax-accent-soft);
+  border: 1px solid var(--ax-border-strong);
+}
+.ax-hero h1 {
+  font-size: 1.7rem; font-weight: 750; margin: 0;
+  letter-spacing: -0.02em; color: #f2f5fb;
+}
+.ax-hero p { margin: 3px 0 0; color: var(--ax-muted); font-size: 0.92rem; }
+
+/* Meta pills under the hero. */
+.ax-meta { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 6px; }
+.ax-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 11px; border-radius: 999px;
+  font-size: 0.78rem; font-weight: 500;
+  color: var(--ax-muted);
+  background: var(--ax-panel); border: 1px solid var(--ax-border);
+}
+.ax-pill code { background: none; color: #cdd6e4; padding: 0; font-size: 0.78rem; }
+.ax-pill.ok  { color: #7ee2a8; border-color: rgba(81,207,102,0.35); background: rgba(81,207,102,0.08); }
+.ax-pill.off { color: #ffb4a0; border-color: rgba(255,135,135,0.35); background: rgba(255,135,135,0.08); }
+.ax-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+/* --- Tabs: pill row ------------------------------------------------------- */
+.stTabs [data-baseweb="tab-list"] {
+  gap: 6px; border-bottom: none; margin-bottom: 8px;
+  background: var(--ax-panel); padding: 6px; border-radius: 12px;
+  border: 1px solid var(--ax-border);
+}
+.stTabs [data-baseweb="tab"] {
+  height: auto; padding: 8px 16px; border-radius: 8px;
+  color: var(--ax-muted); font-weight: 550; font-size: 0.9rem;
+}
+.stTabs [data-baseweb="tab"]:hover { background: rgba(146,164,205,0.08); color: #d6deec; }
+.stTabs [aria-selected="true"] {
+  background: var(--ax-accent) !important; color: #0b0f19 !important;
+}
+.stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] { display: none; }
+
+/* --- Expanders as cards --------------------------------------------------- */
+[data-testid="stExpander"] {
+  border: 1px solid var(--ax-border) !important;
+  border-radius: 12px !important;
+  background: linear-gradient(180deg, var(--ax-panel) 0%, #121828 100%);
+  margin-bottom: 10px; overflow: hidden;
+}
+[data-testid="stExpander"] summary { padding: 12px 16px; font-weight: 550; }
+[data-testid="stExpander"] summary:hover { color: var(--ax-accent); }
+[data-testid="stExpander"]:hover { border-color: var(--ax-border-strong) !important; }
+
+/* --- Metrics as tiles ----------------------------------------------------- */
+[data-testid="stMetric"] {
+  background: var(--ax-panel); border: 1px solid var(--ax-border);
+  border-radius: 12px; padding: 14px 16px;
+}
+[data-testid="stMetricLabel"] { color: var(--ax-muted); }
+[data-testid="stMetricValue"] { font-weight: 700; letter-spacing: -0.01em; }
+
+/* --- Bordered containers -------------------------------------------------- */
+[data-testid="stVerticalBlockBorderWrapper"] {
+  border-radius: 14px; border-color: var(--ax-border) !important;
+}
+
+/* --- Buttons -------------------------------------------------------------- */
+.stButton > button {
+  border-radius: 9px; border: 1px solid var(--ax-border-strong);
+  font-weight: 550; transition: transform .05s ease, border-color .15s ease, background .15s ease;
+}
+.stButton > button:hover { border-color: var(--ax-accent); color: #eef2fb; }
+.stButton > button:active { transform: translateY(1px); }
+
+/* --- Inputs --------------------------------------------------------------- */
+[data-testid="stTextInput"] input, [data-baseweb="select"] > div {
+  border-radius: 9px;
+}
+.stTextInput input:focus { border-color: var(--ax-accent) !important; }
+
+/* Section subheadings breathe a little more. */
+h5 { margin-top: 0.4rem; color: #dfe5f0; }
+
+/* Chip row for result metadata. */
+.ax-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 10px; }
+.ax-chip {
+  font-size: 0.76rem; color: var(--ax-muted);
+  padding: 2px 9px; border-radius: 6px;
+  background: var(--ax-panel-2); border: 1px solid var(--ax-border);
+}
+.ax-chip.score { color: #bcd0ff; border-color: rgba(91,140,255,0.4); background: var(--ax-accent-soft); }
+.ax-chip.grow { color: #7ee2a8; border-color: rgba(81,207,102,0.35); background: rgba(81,207,102,0.08); }
+.ax-chip.fade { color: #ffb4a0; border-color: rgba(255,135,135,0.35); background: rgba(255,135,135,0.08); }
+.ax-chip.warn { color: #ffd97a; border-color: rgba(255,212,59,0.35); background: rgba(255,212,59,0.08); }
+
+/* Empty / offline states. */
+.ax-empty { text-align: center; padding: 20px 12px 8px; }
+.ax-empty-icon {
+  font-size: 40px; line-height: 1; opacity: 0.9;
+  display: inline-grid; place-items: center;
+  width: 72px; height: 72px; border-radius: 18px;
+  background: var(--ax-accent-soft); border: 1px solid var(--ax-border);
+}
+.ax-empty-title { font-weight: 650; font-size: 1.08rem; color: #eef2fb; margin-top: 12px; }
+.ax-empty-sub {
+  color: var(--ax-muted); font-size: 0.9rem; line-height: 1.55;
+  margin: 8px auto 4px; max-width: 540px;
+}
+.ax-empty-sub code {
+  background: rgba(146,164,205,0.16); color: #d6deec;
+  padding: 1px 6px; border-radius: 5px; font-size: 0.85em;
+}
+
+/* Recolor Streamlit's top decoration bar to the brand accent (default is a
+   multi-color gradient that clashes with the navy theme). */
+[data-testid="stDecoration"] {
+  background: linear-gradient(90deg, var(--ax-accent) 0%, #22b8cf 100%);
+}
+
+/* Hypothesis-pitch draft card. */
+.ax-draft-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; border-radius: 999px; font-size: 0.74rem; font-weight: 600;
+  letter-spacing: 0.02em; text-transform: uppercase;
+  color: #ffd97a; background: rgba(255,212,59,0.1); border: 1px solid rgba(255,212,59,0.35);
+}
+.ax-draft-title { font-size: 1.15rem; font-weight: 700; color: #f2f5fb; margin: 8px 0 2px; letter-spacing: -0.01em; }
+
+/* Ranked rows (velocity keywords, etc.). */
+.ax-list { display: flex; flex-direction: column; gap: 6px; }
+.ax-listrow {
+  display: flex; align-items: center; gap: 10px; padding: 8px 14px;
+  border: 1px solid var(--ax-border); border-radius: 10px;
+  background: var(--ax-panel);
+}
+.ax-listrow:hover { border-color: var(--ax-border-strong); background: var(--ax-panel-2); }
+.ax-listrow .ax-rank {
+  color: var(--ax-muted); font-size: 0.82rem; font-variant-numeric: tabular-nums;
+  width: 2em; text-align: right; flex: none;
+}
+.ax-listrow .ax-name {
+  font-weight: 550; color: #e6e9f0; flex: 1;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ax-listrow .ax-chip { flex: none; margin: 0; }
+
+/* Narrow screens: let ranked rows wrap chips under a full-width name instead
+   of overflowing horizontally. */
+@media (max-width: 640px) {
+  .ax-listrow { flex-wrap: wrap; }
+  .ax-listrow .ax-name { flex: 1 1 100%; white-space: normal; }
+  .ax-listrow .ax-rank { width: auto; }
+}
+
+/* Slimmer scrollbar. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #2a3550; border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: #364365; }
+</style>
+"""
+st.markdown(_CSS, unsafe_allow_html=True)
+
+st.markdown(
+    '<div class="ax-hero">'
+    '<div class="ax-mark">🔭</div>'
+    '<div>'
+    '<h1>Axiom</h1>'
+    '<p>Research trends &amp; gaps discovery over the ACL Anthology corpus</p>'
+    '</div></div>',
+    unsafe_allow_html=True,
 )
 
 
@@ -171,6 +377,21 @@ except Exception:
 meta = get_meta()
 st.session_state.setdefault("similar_to", None)
 
+# Corpus / model / index status as a compact pill row under the hero.
+if qdrant_ok:
+    _index_pill = f'<span class="ax-pill ok"><span class="dot"></span>index · {point_count:,} vectors</span>'
+else:
+    _index_pill = '<span class="ax-pill off"><span class="dot"></span>index offline</span>'
+st.markdown(
+    '<div class="ax-meta">'
+    f'<span class="ax-pill">📚 ACL · EMNLP · COLING · NAACL · 2020–2025</span>'
+    f'<span class="ax-pill">collection <code>{config.COLLECTION_NAME}</code></span>'
+    f'<span class="ax-pill">model <code>{config.MODEL_ID}</code></span>'
+    f'{_index_pill}'
+    '</div>',
+    unsafe_allow_html=True,
+)
+
 
 # --- Reading list (OD13): bookmarks only, no LLM summaries (PBI 5 not built) --
 def get_bookmarked_ids() -> set[str]:
@@ -194,20 +415,56 @@ def toggle_bookmark(paper_id: str, *, add: bool) -> None:
 
 
 # --- Result rendering --------------------------------------------------------
+def _chips(*chips: tuple[str, str]) -> None:
+    """Render a horizontal chip row. Each chip is (text, css_suffix) where the
+    suffix is "" for a plain chip or a modifier like "score"/"grow"/"fade"."""
+    inner = "".join(f'<span class="ax-chip {cls}">{txt}</span>' for txt, cls in chips)
+    st.markdown(f'<div class="ax-chips">{inner}</div>', unsafe_allow_html=True)
+
+
+def _empty_state(icon: str, title: str, body_md: str | None = None) -> None:
+    """Card-styled empty/offline placeholder: centered icon tile + title, with
+    an optional body. The body supports a tiny markdown subset (`code`,
+    **strong**, *em*) so setup commands stay formatted inside the centered card."""
+    body_html = ""
+    if body_md:
+        # Drop a leading warning glyph — the card's own icon already signals state.
+        safe = html.escape(body_md.lstrip().removeprefix("⚠️").lstrip())
+        safe = re.sub(r"`([^`]+)`", r"<code>\1</code>", safe)
+        safe = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", safe)
+        safe = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", safe)
+        body_html = f'<div class="ax-empty-sub">{safe}</div>'
+    with st.container(border=True):
+        st.markdown(
+            f'<div class="ax-empty"><div class="ax-empty-icon">{icon}</div>'
+            f'<div class="ax-empty-title">{html.escape(title)}</div>'
+            f'{body_html}</div>',
+            unsafe_allow_html=True,
+        )
+
+
 def render_hits(hits: list[SearchHit], *, score_label: str = "score") -> None:
     """Render hits as expandable cards with concepts, abstract, and a pivot."""
     if not hits:
-        st.info("No papers match the current filters. Loosen the venue/year filters.")
+        _empty_state("🔍", "No papers match these filters",
+                     "Try loosening the venue or year filters, or broaden the query.")
         return
     meta = get_meta()
     bookmarked = get_bookmarked_ids()
-    st.write(f"**{len(hits)} results**")
+    st.caption(f"{len(hits)} result{'s' if len(hits) != 1 else ''}")
     for h in hits:
         m = meta.get(h.paper_id, {})
-        label = f"{h.score:.4f} ({score_label}) · {h.title}  ({h.year} · {h.venue} · {h.cited_by_count} cites)"
-        with st.expander(label):
+        # Title leads the card; dense metadata moves inside as chips so the
+        # expander header stays scannable.
+        with st.expander(h.title):
+            _chips(
+                (f"{h.score:.3f} {score_label}", "score"),
+                (f"📅 {h.year}", ""),
+                (f"🏛 {html.escape(str(h.venue))}", ""),
+                (f"❝ {h.cited_by_count:,} cites", ""),
+            )
             if m.get("doi"):
-                st.markdown(f"[Open paper (DOI)](https://doi.org/{m['doi']})")
+                st.markdown(f"[↗ Open paper (DOI)](https://doi.org/{m['doi']})")
             if h.concepts:
                 st.markdown(" ".join(f"`{c}`" for c in h.concepts))
             st.write(m.get("abstract") or "_No abstract available._")
@@ -232,7 +489,7 @@ def render_hits(hits: list[SearchHit], *, score_label: str = "score") -> None:
 def render_search() -> None:
     """Semantic/hybrid search with the venue/year filter bar."""
     if not qdrant_ok:
-        st.warning(qdrant_msg)
+        _empty_state("🗂️", "Search needs the vector index", qdrant_msg)
         return
     venues, bounds = get_filter_options()
     with st.container():
@@ -292,7 +549,9 @@ def render_search() -> None:
                 hits = store.search(query_vector=qvec, **common)
             render_hits(hits, score_label="RRF rank" if use_hybrid else "cosine")
         else:
-            st.info("Enter a query above to search the corpus.")
+            _empty_state("💬", "Search the corpus",
+                         "Enter a query above — e.g. *reducing hallucination in "
+                         "retrieval-augmented generation*.")
 
 
 # --- Citation-graph tab ------------------------------------------------------
@@ -445,6 +704,250 @@ def _short(comm, k: int = 2) -> str:
     return " · ".join(comm.labels[:k]) if comm.labels else f"cluster {comm.cid}"
 
 
+def _gap_map_svg(analysis, sel_idx: int | None = None, height: int = 460,
+                  dark: bool = True, show_indices: list[int] | None = None) -> str:
+    """Render a subset of candidate gaps as one 'gap map'.
+
+    Sub-topics that take part in a drawn gap sit on a ring (colour = their
+    cluster, dot size = paper count); each candidate gap is an arc bowing
+    across the interior. Arc thickness ∝ G-score and colour marks whether it
+    clears the calibrated threshold (green) or not (amber). The selected gap
+    is lit gold and drawn on top. Pure inline SVG — no JS, no external assets,
+    prints on any bg.
+
+    `show_indices` restricts drawing to those positions in `analysis.gaps`
+    (default: all) — with every candidate drawn at once the arcs converge
+    into an unreadable hairball, so the caller typically passes only the
+    top few by rank. Global indices are kept (not renumbered) so tooltips and
+    the gold "selected" highlight stay consistent with the ranked list above.
+    """
+    import math
+
+    bg = "#0b0f19" if dark else "#f8f9fb"
+    label_fill = "#cdd6e4" if dark else "#3a4150"
+    legend_fill = "#9ca3af" if dark else "#6b7280"
+
+    all_gaps = analysis.gaps
+    show_indices = list(range(len(all_gaps))) if show_indices is None else show_indices
+    indexed = [(i, all_gaps[i]) for i in show_indices]
+    if not indexed:
+        return ""
+
+    # Communities that participate in a drawn gap, kept in gap-rank order so
+    # the busiest / strongest sub-topics land first on the ring.
+    order: list[int] = []
+    for _, gp in indexed:
+        for comm in (gp.a, gp.b):
+            if comm.cid not in order:
+                order.append(comm.cid)
+    comm_by_cid = {gp.a.cid: gp.a for _, gp in indexed}
+    comm_by_cid.update({gp.b.cid: gp.b for _, gp in indexed})
+
+    W, H = 820, height
+    cx, cy = W / 2.0, H / 2.0
+    R = min(W, H) / 2.0 - 96          # ring radius (leave room for labels)
+    n = len(order)
+    sizes = [comm_by_cid[c].size for c in order]
+    smax = max(sizes) or 1
+
+    # Position each community on the ring; start at the top, go clockwise.
+    pos: dict[int, tuple[float, float, float]] = {}
+    for k, cid in enumerate(order):
+        ang = -math.pi / 2 + 2 * math.pi * k / n
+        pos[cid] = (cx + R * math.cos(ang), cy + R * math.sin(ang), ang)
+
+    g_scores = [gp.g_score for _, gp in indexed]
+    g_lo, g_hi = min(g_scores), max(g_scores)
+    g_span = (g_hi - g_lo) or 1.0
+
+    def esc(s: str) -> str:
+        return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+    parts = [
+        f'<svg viewBox="0 0 {W} {H}" width="100%" '
+        f'style="max-width:{W}px;height:auto;background:{bg};border-radius:10px;'
+        f'font-family:-apple-system,Segoe UI,Roboto,sans-serif;" '
+        f'role="img" aria-label="Candidate research-gap map">'
+    ]
+
+    # --- arcs (gaps): weakest first so strong/selected ones sit on top ---------
+    drawn = sorted(range(len(indexed)),
+                   key=lambda k: (indexed[k][0] == sel_idx, indexed[k][1].g_score))
+    for k in drawn:
+        i, gp = indexed[k]
+        ax, ay, _ = pos[gp.a.cid]
+        bx, by, _ = pos[gp.b.cid]
+        # Control point pulled toward centre so arcs bow inward (chord look).
+        mx, my = (ax + bx) / 2.0, (ay + by) / 2.0
+        ctrlx = cx + (mx - cx) * 0.35
+        ctrly = cy + (my - cy) * 0.35
+        norm = (gp.g_score - g_lo) / g_span
+        selected = (i == sel_idx)
+        if selected:
+            stroke, width, opacity = "#ffd43b", 3.5 + 5 * norm, 1.0
+        elif gp.meets_threshold:
+            stroke, width, opacity = "#51cf66", 1.5 + 4.5 * norm, 0.75
+        else:
+            stroke, width, opacity = "#ffa94d", 1.2 + 3.5 * norm, 0.5
+        tip = (f"#{i} {_short(gp.a)} ⟷ {_short(gp.b)} — "
+               f"sim {gp.semantic_similarity:.2f}, {gp.inter_citations} cites, "
+               f"G {gp.g_score:.2f}")
+        glow = ('filter="drop-shadow(0 0 6px rgba(255,212,59,0.9))" '
+                if selected else "")
+        parts.append(
+            f'<path d="M {ax:.1f} {ay:.1f} Q {ctrlx:.1f} {ctrly:.1f} '
+            f'{bx:.1f} {by:.1f}" fill="none" stroke="{stroke}" '
+            f'stroke-width="{width:.1f}" stroke-linecap="round" '
+            f'stroke-opacity="{opacity}" {glow}>'
+            f'<title>{esc(tip)}</title></path>'
+        )
+
+    # --- community nodes + labels --------------------------------------------
+    for cid in order:
+        x, y, ang = pos[cid]
+        comm = comm_by_cid[cid]
+        r = 5 + 9 * (comm.size / smax)
+        color = _community_color(cid)
+        parts.append(
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{r:.1f}" fill="{color}" '
+            f'stroke="{bg}" stroke-width="1.5">'
+            f'<title>{esc(comm.label)} · {comm.size} papers</title></circle>'
+        )
+        # Label just outside the ring — one concept per line so full names show
+        # (no truncation), block anchored away from the centre.
+        cos_a, sin_a = math.cos(ang), math.sin(ang)
+        lines = comm.labels[:2] or [f"cluster {cid}"]
+        lines = [ln if k == 0 else f"· {ln}" for k, ln in enumerate(lines)]
+        if abs(cos_a) < 0.30:            # top / bottom of the ring
+            anchor = "middle"
+            lx = x
+            ly = y + (r + 12) * (1 if sin_a > 0 else -1)
+        else:                            # left / right side
+            anchor = "start" if cos_a > 0 else "end"
+            lx = x + (r + 8) * (1 if cos_a > 0 else -1)
+            ly = y
+        # Vertically centre the multi-line block on ly: first line lifted to the
+        # top of the block (+0.32em baseline nudge), each subsequent line +1em.
+        top = -(len(lines) - 1) / 2.0
+        spans = "".join(
+            f'<tspan x="{lx:.1f}" dy="{(top + 0.32) if k == 0 else 1:.2f}em">{esc(ln)}</tspan>'
+            for k, ln in enumerate(lines)
+        )
+        parts.append(
+            f'<text x="{lx:.1f}" y="{ly:.1f}" text-anchor="{anchor}" '
+            f'fill="{label_fill}" font-size="11">{spans}</text>'
+        )
+
+    # --- legend ---------------------------------------------------------------
+    parts.append(
+        f'<g font-size="11" fill="{legend_fill}">'
+        f'<rect x="14" y="{H-30}" width="18" height="3" rx="1.5" fill="#51cf66"/>'
+        f'<text x="38" y="{H-25}">meets threshold</text>'
+        f'<rect x="150" y="{H-30}" width="18" height="3" rx="1.5" fill="#ffa94d"/>'
+        f'<text x="174" y="{H-25}">below threshold</text>'
+        f'<rect x="286" y="{H-30}" width="18" height="3" rx="1.5" fill="#ffd43b"/>'
+        f'<text x="310" y="{H-25}">selected</text>'
+        f'<text x="{W-14}" y="{H-25}" text-anchor="end">'
+        f'thickness = G-score · dot size = papers</text>'
+        f'</g></svg>'
+    )
+    return "".join(parts)
+
+
+def _gap_bar_chart(analysis, sel_idx: int | None = None) -> None:
+    """Ranked-list alternative to the ring diagram: one horizontal bar per
+    candidate gap, sorted by G-score. Unambiguous to read (no crossing lines)
+    at the cost of not showing which communities repeat across gaps."""
+    rows = [
+        {
+            "label": f"#{i} {_short(gp.a)} ⟷ {_short(gp.b)}",
+            "g_score": gp.g_score,
+            "status": "selected" if i == sel_idx
+                      else ("meets threshold" if gp.meets_threshold else "below threshold"),
+            "a_label": gp.a.label,
+            "b_label": gp.b.label,
+            "similarity": gp.semantic_similarity,
+            "inter_citations": gp.inter_citations,
+        }
+        for i, gp in enumerate(analysis.gaps)
+    ]
+    df = pd.DataFrame(rows)
+    color_scale = alt.Scale(
+        domain=["selected", "meets threshold", "below threshold"],
+        range=["#ffd43b", "#51cf66", "#ffa94d"],
+    )
+    chart = alt.Chart(df).mark_bar().encode(
+        y=alt.Y("label:N", sort=None, title=None, axis=alt.Axis(labelLimit=340)),
+        x=alt.X("g_score:Q", title="G-score", scale=alt.Scale(domain=[0, 1])),
+        color=alt.Color("status:N", scale=color_scale, legend=alt.Legend(title=None)),
+        tooltip=[
+            alt.Tooltip("a_label:N", title="Side A"),
+            alt.Tooltip("b_label:N", title="Side B"),
+            alt.Tooltip("g_score:Q", title="G-score", format=".2f"),
+            alt.Tooltip("similarity:Q", title="semantic similarity", format=".2f"),
+            alt.Tooltip("inter_citations:Q", title="inter-community citations"),
+        ],
+    ).properties(height=alt.Step(28))
+    st.altair_chart(chart, use_container_width=True)
+
+
+def _gap_matrix_chart(analysis, sel_idx: int | None = None) -> None:
+    """Matrix alternative: sub-topics on both axes, cell colour = G-score.
+
+    No crossing lines to trace — scan for the brightest cell. Only cells that
+    are an actual candidate pair (in analysis.gaps) are filled; everything
+    else is blank. Symmetric (both (a, b) and (b, a) filled) so the grid reads
+    the same whichever axis you scan first.
+    """
+    labels_by_cid: dict[int, str] = {}
+    for gp in analysis.gaps:
+        labels_by_cid[gp.a.cid] = _short(gp.a)
+        labels_by_cid[gp.b.cid] = _short(gp.b)
+    # Order communities by their best (max) G-score across all their gaps, so
+    # the most gap-heavy sub-topics cluster near the top-left of the grid.
+    best_score: dict[int, float] = {}
+    for gp in analysis.gaps:
+        best_score[gp.a.cid] = max(best_score.get(gp.a.cid, 0.0), gp.g_score)
+        best_score[gp.b.cid] = max(best_score.get(gp.b.cid, 0.0), gp.g_score)
+    order = sorted(labels_by_cid, key=lambda c: best_score[c], reverse=True)
+    order_labels = [labels_by_cid[c] for c in order]
+
+    rows = []
+    for i, gp in enumerate(analysis.gaps):
+        status = ("selected" if i == sel_idx
+                  else ("meets threshold" if gp.meets_threshold else "below threshold"))
+        common = dict(
+            g_score=gp.g_score, status=status,
+            similarity=gp.semantic_similarity, inter_citations=gp.inter_citations,
+            idx=i,
+        )
+        rows.append({"row": labels_by_cid[gp.a.cid], "col": labels_by_cid[gp.b.cid], **common})
+        rows.append({"row": labels_by_cid[gp.b.cid], "col": labels_by_cid[gp.a.cid], **common})
+    df = pd.DataFrame(rows)
+
+    base = alt.Chart(df).encode(
+        x=alt.X("col:N", sort=order_labels, title=None, axis=alt.Axis(labelAngle=-40)),
+        y=alt.Y("row:N", sort=order_labels, title=None),
+    )
+    cells = base.mark_rect(stroke="white", strokeWidth=1).encode(
+        color=alt.Color("g_score:Q", title="G-score", scale=alt.Scale(scheme="greens")),
+        tooltip=[
+            alt.Tooltip("row:N", title="Side A"),
+            alt.Tooltip("col:N", title="Side B"),
+            alt.Tooltip("g_score:Q", title="G-score", format=".2f"),
+            alt.Tooltip("similarity:Q", title="semantic similarity", format=".2f"),
+            alt.Tooltip("inter_citations:Q", title="inter-community citations"),
+        ],
+    )
+    selected = base.transform_filter(alt.datum.status == "selected").mark_rect(
+        fill=None, stroke="#e6b800", strokeWidth=3,
+    )
+    chart = (cells + selected).properties(
+        width=alt.Step(60), height=alt.Step(40),
+    )
+    st.altair_chart(chart, use_container_width=False)
+
+
 def _render_gap_detail(g, gap) -> None:
     """Explain a candidate gap and list the top papers on each side."""
     st.markdown(
@@ -478,7 +981,7 @@ def render_graph_view() -> None:
     """Research gaps + citation structure (communities, gaps, influence)."""
     if not qdrant_ok:
         st.subheader("Research gaps & citation structure")
-        st.warning(qdrant_msg)
+        _empty_state("🕸️", "The citation graph needs the vector index", qdrant_msg)
         return
     st.subheader("Research gaps & citation structure")
     st.caption(
@@ -490,7 +993,9 @@ def render_graph_view() -> None:
     g = get_graph()
     gs = graph.stats(g)
     if gs["edges_in_corpus"] == 0:
-        st.info("No in-corpus citation edges yet — ingest a connected corpus first.")
+        _empty_state("🔗", "No in-corpus citations yet",
+                     "The graph has papers but no edges between them — ingest a "
+                     "connected corpus to reveal communities and gaps.")
         return
 
     analysis = get_gap_analysis()
@@ -603,18 +1108,75 @@ def render_graph_view() -> None:
         _stored = st.session_state.get("last_pitch")
         if _stored is not None and _stored[0] == sel_gap_idx:
             last_pitch = _stored[1]
-            st.markdown(f"##### {last_pitch.title}")
-            st.write(last_pitch.claim)
-            st.markdown(f"**Method sketch:** {last_pitch.method_sketch}")
-            if last_pitch.datasets:
-                st.markdown("**Datasets:** " + ", ".join(f"`{d}`" for d in last_pitch.datasets))
-            st.markdown(
-                "**Supporting papers:** " +
-                ", ".join(f"`{pid}`" for pid in last_pitch.supporting_paper_ids)
-            )
-            st.caption(f"⚠️ {last_pitch.disclaimer} Sent to the Review queue as pending.")
+            with st.container(border=True):
+                st.markdown(
+                    '<span class="ax-draft-badge">✦ Draft hypothesis</span>'
+                    f'<div class="ax-draft-title">{html.escape(last_pitch.title)}</div>',
+                    unsafe_allow_html=True,
+                )
+                st.write(last_pitch.claim)
+                st.markdown(f"**Method sketch:** {last_pitch.method_sketch}")
+                if last_pitch.datasets:
+                    st.markdown("**Datasets:** " + ", ".join(f"`{d}`" for d in last_pitch.datasets))
+                st.markdown(
+                    "**Supporting papers:** " +
+                    ", ".join(f"`{pid}`" for pid in last_pitch.supporting_paper_ids)
+                )
+                st.caption(f"⚠️ {last_pitch.disclaimer} Sent to the Review queue as pending.")
 
-        with st.expander(f"All {len(analysis.gaps)} candidate gaps (ranked)"):
+        st.markdown(f"##### Gap map — {len(analysis.gaps)} candidate gaps")
+        gm_mode_col, gm_opt_col = st.columns([1, 2])
+        with gm_mode_col:
+            gap_map_mode = st.radio(
+                "Display as", ["Ring diagram", "Ranked list", "Matrix"],
+                horizontal=True, key="gap_map_mode",
+                help="Ring diagram: sub-topics on a ring, arcs bridge related-but-"
+                     "disconnected pairs (arcs can cross). Ranked list: same gaps "
+                     "as plain bars, no crossing lines. Matrix: sub-topics on both "
+                     "axes, cell brightness = G-score — no lines to trace at all.",
+            )
+        if gap_map_mode == "Ring diagram":
+            with gm_opt_col:
+                topk_col, light_col = st.columns([2, 1])
+                with topk_col:
+                    max_drawable = len(analysis.gaps)
+                    top_k_show = st.slider(
+                        "Gaps to draw", min(3, max_drawable), max_drawable,
+                        min(6, max_drawable), key="gap_map_topk",
+                        help="Drawing all candidate gaps at once tangles the arcs "
+                             "into a hairball — showing just the top few by "
+                             "G-score keeps it readable.",
+                    ) if max_drawable > 3 else max_drawable
+                with light_col:
+                    gap_map_light = st.toggle("Light background", value=False,
+                                               key="gap_map_light")
+            st.caption(
+                "Each sub-topic on the ring; the drawn candidate gaps are arcs "
+                "bridging two of them, strongest G-score first. The gap picked "
+                "above is lit gold. Hover any arc or dot for details."
+            )
+            show_indices = list(range(top_k_show))
+            components.html(
+                f'<div style="width:100%">'
+                f'{_gap_map_svg(analysis, sel_gap_idx, dark=not gap_map_light, show_indices=show_indices)}'
+                f'</div>',
+                height=480, scrolling=False,
+            )
+        elif gap_map_mode == "Ranked list":
+            st.caption(
+                "All candidate gaps, ranked by G-score. Gold = the gap picked "
+                "above, green = meets the calibrated threshold, amber = below it."
+            )
+            _gap_bar_chart(analysis, sel_gap_idx)
+        else:
+            st.caption(
+                "Sub-topics on both axes; a filled cell is a candidate gap, "
+                "darker = higher G-score. Gold outline = the gap picked above. "
+                "Blank cells weren't ranked as candidates."
+            )
+            _gap_matrix_chart(analysis, sel_gap_idx)
+
+        with st.expander(f"All {len(analysis.gaps)} candidate gaps (ranked, as text)"):
             for i, gp in enumerate(analysis.gaps, 1):
                 st.markdown(
                     f"{i}. **{_short(gp.a)}** ⟷ **{_short(gp.b)}** — "
@@ -628,12 +1190,16 @@ def render_graph_view() -> None:
     ranking = get_influence_ranking(50)[:n]
 
     for i, r in enumerate(ranking, 1):
-        label = (f"{i}. {r.title}  ·  PR={r.pagerank:.4f}  ·  "
-                 f"{r.local_in_degree} local / {r.cited_by_count} global cites  ·  {r.year}")
-        with st.expander(label):
+        with st.expander(f"{i}.  {r.title}"):
+            _chips(
+                (f"PR {r.pagerank:.4f}", "score"),
+                (f"📅 {r.year}", ""),
+                (f"{r.local_in_degree:,} local cites", ""),
+                (f"{r.cited_by_count:,} global cites", ""),
+            )
             m = meta.get(r.paper_id, {})
             if m.get("doi"):
-                st.markdown(f"[Open paper (DOI)](https://doi.org/{m['doi']})")
+                st.markdown(f"[↗ Open paper (DOI)](https://doi.org/{m['doi']})")
             nb = graph.neighbors(g, r.paper_id)
             ext = sum(1 for x in nb.references if not x["in_corpus"])
             st.markdown(
@@ -719,7 +1285,9 @@ def render_trending() -> None:
 
     analysis = get_velocity_analysis(venue, year_range)
     if not analysis.keywords:
-        st.info("Not enough dated papers to compute velocity for this filter.")
+        _empty_state("📉", "Not enough dated papers",
+                     "This venue/year filter doesn't have enough dated papers to "
+                     "compute velocity. Widen the filter to see trends.")
         return
     if analysis.insufficient_year_spread:
         st.warning("Selected range spans a single year — velocity needs at least two years to compare.")
@@ -762,12 +1330,20 @@ def render_trending() -> None:
         _velocity_bar_chart(fading, color="#d62728")
 
     st.markdown("##### Ranked keywords")
+    rows_html = []
     for i, k in enumerate(analysis.keywords, 1):
-        flag = " ⚠️ low-volume" if k.low_confidence else ""
-        st.markdown(
-            f"{i}. **{k.concept}** — velocity `{k.velocity:+.2f}`{flag}  "
-            f"({k.prior_count} → {k.recent_count} papers)"
+        vel_cls = "grow" if k.velocity >= 0 else "fade"
+        warn = '<span class="ax-chip warn">⚠ low volume</span>' if k.low_confidence else ""
+        rows_html.append(
+            '<div class="ax-listrow">'
+            f'<span class="ax-rank">{i}</span>'
+            f'<span class="ax-name">{html.escape(k.concept)}</span>'
+            f'{warn}'
+            f'<span class="ax-chip">{k.prior_count} → {k.recent_count} papers</span>'
+            f'<span class="ax-chip {vel_cls}">{k.velocity:+.2f}</span>'
+            '</div>'
         )
+    st.markdown(f'<div class="ax-list">{"".join(rows_html)}</div>', unsafe_allow_html=True)
 
 
 # --- Reading list tab ---------------------------------------------------------
@@ -786,15 +1362,21 @@ def render_reading_list() -> None:
         conn.close()
 
     if not rows:
-        st.info("No bookmarks yet — add one from a Search result card.")
+        _empty_state("📚", "Your reading list is empty",
+                     "Bookmark papers from a **Search** result card and they'll "
+                     "collect here for local summarization.")
         return
 
-    st.write(f"**{len(rows)} bookmarked papers**")
+    st.caption(f"{len(rows)} bookmarked paper{'s' if len(rows) != 1 else ''}")
     for r in rows:
-        label = f"{r['title']}  ({r['publication_year']} · {r['venue']} · {r['cited_by_count']} cites)"
-        with st.expander(label):
+        with st.expander(r["title"]):
+            _chips(
+                (f"📅 {r['publication_year']}", ""),
+                (f"🏛 {html.escape(str(r['venue']))}", ""),
+                (f"❝ {r['cited_by_count']:,} cites", ""),
+            )
             if r["doi"]:
-                st.markdown(f"[Open paper (DOI)](https://doi.org/{r['doi']})")
+                st.markdown(f"[↗ Open paper (DOI)](https://doi.org/{r['doi']})")
             st.write(r["abstract"] or "_No abstract available._")
 
             conn3 = db.connect()
@@ -853,7 +1435,9 @@ def render_review_queue() -> None:
         conn.close()
 
     if not rows:
-        st.info(f"No {status_filter} items.")
+        _empty_state("🗂️", f"No {status_filter} pitches",
+                     "Generate a hypothesis pitch from the **Citation graph** → "
+                     "Research-gaps view and it will queue here for review.")
         return
 
     for r in rows:

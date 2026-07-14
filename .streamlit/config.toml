@@ -1,0 +1,13 @@
+# Axiom app theme. Navy palette is shared with the 3D citation graph
+# (background #0b0f19) so the WebGL canvas blends into the page instead of
+# floating as a black box. Classic theme keys only — pinned to Streamlit 1.37.
+[theme]
+base = "dark"
+primaryColor = "#5b8cff"
+backgroundColor = "#0b0f19"
+secondaryBackgroundColor = "#151b2b"
+textColor = "#e6e9f0"
+font = "sans serif"
+
+[client]
+toolbarMode = "minimal"
