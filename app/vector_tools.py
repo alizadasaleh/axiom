@@ -6,7 +6,7 @@ using the same axiom_v1 collection and QdrantClient as the main platform.
 
 Gap algorithm note
 ------------------
-The "Research gaps" tab (Citation graph) uses OD9: Louvain community detection
+The "Research gaps" tab uses OD9: Louvain community detection
 on the citation graph + semantic centroids + weak-citation scoring. The Vector
 Gap Discovery section here uses a different method: KMeans topic clustering +
 bridge-paper scan on raw vector geometry (no citation structure). Both views
@@ -26,6 +26,10 @@ from sklearn.decomposition import PCA
 
 from axiom import config
 from axiom.qdrant_client import AxiomQdrant
+
+
+def _plot_theme() -> str | None:
+    return "streamlit" if st.session_state.get("ax_theme") == "dark" else None
 
 
 # ---------------------------------------------------------------------------
@@ -444,7 +448,7 @@ def render_proximity_analyzer(store: AxiomQdrant) -> None:
             xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
             yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, theme=_plot_theme())
     else:
         st.info("Not enough neighbours in the collection to draw a landscape map.")
 
@@ -622,7 +626,7 @@ def render_vector_gap_discovery(store: AxiomQdrant) -> None:
         xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
         yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, theme=_plot_theme())
     st.caption(
         "The two related topic clouds (green / purple) with ✖ marking the empty space "
         "between them. Grey = every other topic."
