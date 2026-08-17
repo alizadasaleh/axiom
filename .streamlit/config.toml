@@ -1,0 +1,13 @@
+# Default first paint. The in-app Light/Dark button overrides via CSS
+# variables — do not rely on Streamlit's own Settings → Theme, it cannot
+# recolor the custom hero/tabs/chips.
+[theme]
+base = "dark"
+primaryColor = "#5b8cff"
+backgroundColor = "#0b0f19"
+secondaryBackgroundColor = "#151b2b"
+textColor = "#e6e9f0"
+font = "sans serif"
+
+[client]
+toolbarMode = "minimal"

@@ -27,7 +27,7 @@ product itself.
 | Reading list — bookmarks + local-LLM summaries (OD13/OD14) | ✅ |
 | FastAPI service layer (OD12) | ✅ |
 | nDCG@10 retrieval eval, real corpus (OD11) | ✅ (mean 0.453, single-pass labels) |
-| Streamlit UI: Search, Trending, Citation graph, Reading list, Review queue, **Vector tools** | ✅ |
+| Streamlit UI: Trending, Research gaps, Search, Reading list, Review queue, **Advanced: vector geometry** | ✅ |
 | LLM hypothesis pitch + HITL review queue (PBI 5) | ✅ (OD16 — grounded pitch + rule-based verifier + review queue) |
 | React frontend | ❌ not started |
 | Composite gap G-score (OD17) | ✅ (uncalibrated defaults) |
@@ -88,7 +88,7 @@ python scripts/ingest_openalex.py --topic "natural language processing" --target
 streamlit run app/streamlit_app.py
 ```
 
-All tabs — including the **🔗 Vector tools** tab — then read from the same
+All tabs — including the **Advanced: vector geometry** tab — then read from the same
 `axiom_v1` collection, so there is no need to run a separate Streamlit process.
 
 ### Verify it end-to-end
@@ -148,9 +148,10 @@ scripts/ingest_openalex.py ──────────────►  SQLite
         ▼
 ┌─────────────────────────────┐        ┌──────────────────────────────┐
 │ app/streamlit_app.py         │        │ api/main.py (FastAPI, OD12)   │
-│ Search · Trending · Graph/   │        │ 17 REST routes over the same  │
-│ Gaps · Reading list · Review │        │ axiom/* modules — no React    │
-│ queue · Vector tools         │        │ consumer yet                  │
+│ Trending · Research gaps ·   │        │ 17 REST routes over the same  │
+│ Search · Reading list ·      │        │ axiom/* modules — no React    │
+│ Review queue · Advanced:     │        │ consumer yet                  │
+│ vector geometry              │        │                               │
 │ (imports axiom/* + vector_tools)│      │                               │
 └─────────────────────────────┘        └──────────────────────────────┘
 ```
@@ -177,7 +178,7 @@ axiom/summarize.py               T7.4 paper summarization (OD14)
 axiom/hypothesis.py              OD16 hypothesis pitch + rule-based verifier (PBI 5)
 axiom/llm.py                     shared local-Ollama client (OD14)
 
-app/streamlit_app.py             6-tab UI: Search, Trending, Citation graph, Reading list, Review queue, Vector tools
+app/streamlit_app.py             6-tab UI: Trending, Research gaps, Search, Reading list, Review queue, Advanced: vector geometry
 app/vector_tools.py              Vector tools render functions (Proximity Analyzer + Vector Gap Discovery)
 api/main.py                      FastAPI service layer (OD12)
 

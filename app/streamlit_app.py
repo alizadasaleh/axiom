@@ -1,16 +1,17 @@
-"""Axiom P1 search page.
+"""Axiom Streamlit UI.
 
-Free-text query -> SPECTER2 encode -> Qdrant search (hybrid dense+sparse by
-default, or dense-only via the toggle), with a venue/year filter bar. Results
-render as expandable cards (title/DOI, concepts, abstract) and each card can
-pivot to "similar papers". Functionality only; no styling polish.
+Demo tab order: Trending → Research gaps → Search → Reading list →
+Review queue → Vector geometry. Visual polish (navy theme, hero, chips,
+empty states) is from the ui-ux-polish work.
 
 Run from the repo root:
     streamlit run app/streamlit_app.py
 """
 from __future__ import annotations
 
+import html
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -30,12 +31,371 @@ from axiom.embed import Specter2Encoder
 from axiom.qdrant_client import AxiomQdrant, SearchHit
 from vector_tools import render_proximity_analyzer, render_vector_gap_discovery
 
-st.set_page_config(page_title="Axiom — Thesis Discovery", layout="wide")
-st.title("Axiom — Research Trends & Gaps Discovery")
-st.caption(
-    f"Collection `{config.COLLECTION_NAME}` · model `{config.MODEL_ID}` · "
-    "ACL Anthology corpus (ACL/EMNLP/COLING/NAACL, 2020–2025)"
+st.set_page_config(
+    page_title="Axiom · Thesis Discovery",
+    page_icon="🔭",
+    layout="wide",
 )
+
+
+def _resolve_theme() -> str:
+    """App-wide light/dark. Query param wins so a refresh keeps the choice."""
+    qp = st.query_params.get("theme")
+    if isinstance(qp, list):
+        qp = qp[0] if qp else None
+    if qp in ("light", "dark"):
+        st.session_state["ax_theme"] = qp
+    st.session_state.setdefault("ax_theme", "dark")
+    return st.session_state["ax_theme"]
+
+
+def _set_theme(next_theme: str) -> None:
+    st.session_state["ax_theme"] = next_theme
+    st.query_params["theme"] = next_theme
+
+
+def _chart_theme() -> str | None:
+    """Streamlit chart theming: follow the in-app toggle, not config.toml."""
+    return "streamlit" if st.session_state.get("ax_theme") == "dark" else None
+
+
+# --- Visual polish -----------------------------------------------------------
+# Palettes swap via one button. Custom chrome used to be hardcoded navy, which
+# stayed dark even when Streamlit itself was Light.
+_CSS_DARK = """
+:root {
+  --ax-accent: #5b8cff;
+  --ax-accent-soft: rgba(91,140,255,0.14);
+  --ax-bg: #0b0f19;
+  --ax-hero-bg: #131a29;
+  --ax-hero-tint: rgba(91,140,255,0.16);
+  --ax-panel: #151b2b;
+  --ax-panel-2: #1b2334;
+  --ax-border: rgba(146,164,205,0.18);
+  --ax-border-strong: rgba(146,164,205,0.32);
+  --ax-muted: #c5d0e0;
+  --ax-text: #eef2f8;
+  --ax-heading: #f4f7fb;
+  --background-color: #0b0f19;
+  --secondary-background-color: #151b2b;
+  --text-color: #eef2f8;
+  --ax-tab-active-fg: #0b0f19;
+  --ax-tab-hover: #d6deec;
+  --ax-code: #cdd6e4;
+  --ax-scroll: #2a3550;
+  --ax-scroll-hover: #364365;
+  --ax-chip-score: #bcd0ff;
+}
+"""
+
+_CSS_LIGHT = """
+:root {
+  --ax-accent: #3b6fd8;
+  --ax-accent-soft: rgba(59,111,216,0.12);
+  --ax-bg: #f4f6fb;
+  --ax-hero-bg: #ffffff;
+  --ax-hero-tint: rgba(59,111,216,0.08);
+  --ax-panel: #ffffff;
+  --ax-panel-2: #eef1f7;
+  --ax-border: rgba(40,55,85,0.14);
+  --ax-border-strong: rgba(40,55,85,0.28);
+  --ax-muted: #3a4556;
+  --ax-text: #121821;
+  --ax-heading: #121821;
+  --ax-tab-active-fg: #ffffff;
+  --ax-tab-hover: #121821;
+  --ax-code: #1e293b;
+  --ax-scroll: #c5cddb;
+  --ax-scroll-hover: #a8b2c4;
+  --ax-chip-score: #2f5eb8;
+  --background-color: #f4f6fb;
+  --secondary-background-color: #ffffff;
+  --text-color: #121821;
+}
+"""
+
+_CSS = """
+<style>
+__PALETTE__
+
+.stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"],
+[data-testid="stToolbar"], .stApp header {
+  background-color: var(--ax-bg) !important;
+}
+.stApp { color: var(--ax-text); }
+
+/* Captions/labels otherwise keep Streamlit Light greys on our dark page. */
+[data-testid="stCaption"],
+[data-testid="stCaptionContainer"],
+[data-testid="stCaptionContainer"] p,
+[data-testid="stWidgetLabel"],
+[data-testid="stWidgetLabel"] p,
+[data-testid="stWidgetLabel"] label,
+label, small {
+  color: var(--ax-muted) !important;
+  opacity: 1 !important;
+}
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li,
+.stMarkdown p, h1, h2, h3, h4, h5, h6 {
+  color: var(--ax-heading) !important;
+}
+[data-testid="stAlert"] {
+  background-color: var(--ax-panel-2) !important;
+  color: var(--ax-text) !important;
+  border: 1px solid var(--ax-border-strong) !important;
+}
+[data-testid="stAlert"] p,
+[data-testid="stAlert"] span,
+[data-testid="stAlert"] div {
+  color: var(--ax-text) !important;
+}
+
+.block-container {
+  position: relative;
+  padding: 1.6rem 2rem 3rem 2rem !important;
+  max-width: 1180px;
+}
+
+/* Marker + the following st.button (theme toggle). Streamlit 1.37 has no st-key-* class. */
+.element-container:has(#ax-theme-marker) {
+  display: none;
+}
+.element-container:has(#ax-theme-marker) + .element-container {
+  position: absolute;
+  top: 1.7rem;
+  right: 2rem;
+  z-index: 20;
+  width: auto !important;
+  background: transparent !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+.element-container:has(#ax-theme-marker) + .element-container .stButton {
+  width: auto !important;
+  background: transparent !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+.element-container:has(#ax-theme-marker) + .element-container [data-testid="stTooltipHoverTarget"],
+.element-container:has(#ax-theme-marker) + .element-container [data-testid="stTooltipHoverTarget"] > div {
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+.element-container:has(#ax-theme-marker) + .element-container button {
+  width: auto !important;
+  min-width: 6.6rem;
+  background: var(--ax-panel-2) !important;
+  color: var(--ax-text) !important;
+  border: 1px solid var(--ax-border-strong) !important;
+  border-radius: 9px !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Tab labels sit inside a padded bar; panel content was flush left. Match the hero. */
+.stTabs [data-baseweb="tab-panel"],
+div[data-testid="stTab"] {
+  padding: 1.15rem 1.25rem 1.25rem 1.25rem !important;
+  box-sizing: border-box;
+}
+
+.ax-hero {
+  display: flex; align-items: center; gap: 16px;
+  padding: 16px 8.5rem 16px 20px;
+  margin: 0 0 4px 0;
+  border: 1px solid var(--ax-border);
+  border-radius: 16px;
+  background:
+    radial-gradient(120% 140% at 0% 0%, var(--ax-hero-tint) 0%, transparent 55%),
+    var(--ax-hero-bg);
+}
+.ax-hero-copy { flex: 1; min-width: 0; }
+.ax-hero .ax-mark {
+  font-size: 34px; line-height: 1;
+  width: 58px; height: 58px; flex: none;
+  display: grid; place-items: center;
+  border-radius: 14px;
+  background: var(--ax-accent-soft);
+  border: 1px solid var(--ax-border-strong);
+}
+.ax-hero h1 {
+  font-size: 1.7rem; font-weight: 750; margin: 0;
+  letter-spacing: -0.02em; color: var(--ax-text);
+}
+.ax-hero p { margin: 3px 0 0; color: var(--ax-muted) !important; font-size: 0.92rem; }
+
+.ax-meta { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 10px; }
+.ax-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 11px; border-radius: 999px;
+  font-size: 0.78rem; font-weight: 500;
+  color: var(--ax-muted);
+  background: var(--ax-panel); border: 1px solid var(--ax-border);
+}
+.ax-pill code { background: none; color: var(--ax-code); padding: 0; font-size: 0.78rem; }
+.ax-pill.ok  { color: #2f9e62; border-color: rgba(81,207,102,0.45); background: rgba(81,207,102,0.12); }
+.ax-pill.off { color: #c24a3a; border-color: rgba(255,135,135,0.45); background: rgba(255,135,135,0.12); }
+.ax-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+.stTabs [data-baseweb="tab-list"] {
+  gap: 6px; border-bottom: none; margin: 8px 0 4px;
+  background: var(--ax-panel); padding: 6px; border-radius: 12px;
+  border: 1px solid var(--ax-border);
+}
+.stTabs [data-baseweb="tab"] {
+  height: auto; padding: 8px 16px; border-radius: 8px;
+  color: var(--ax-muted); font-weight: 550; font-size: 0.9rem;
+}
+.stTabs [data-baseweb="tab"]:hover { background: var(--ax-accent-soft); color: var(--ax-tab-hover); }
+.stTabs [aria-selected="true"] {
+  background: var(--ax-accent) !important; color: var(--ax-tab-active-fg) !important;
+}
+.stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] { display: none; }
+
+[data-testid="stExpander"] {
+  border: 1px solid var(--ax-border) !important;
+  border-radius: 12px !important;
+  background: var(--ax-panel);
+  margin-bottom: 10px; overflow: hidden;
+}
+[data-testid="stExpander"] summary { padding: 12px 16px; font-weight: 550; color: var(--ax-text); }
+[data-testid="stExpander"] summary:hover { color: var(--ax-accent); }
+[data-testid="stExpander"]:hover { border-color: var(--ax-border-strong) !important; }
+
+[data-testid="stMetric"] {
+  background: var(--ax-panel); border: 1px solid var(--ax-border);
+  border-radius: 12px; padding: 14px 16px;
+}
+[data-testid="stMetricLabel"] { color: var(--ax-muted); }
+[data-testid="stMetricValue"] { font-weight: 700; letter-spacing: -0.01em; color: var(--ax-text); }
+
+[data-testid="stVerticalBlockBorderWrapper"] {
+  border-radius: 14px; border-color: var(--ax-border) !important;
+  background: var(--ax-panel);
+}
+
+.stButton {
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+.stButton > button {
+  border-radius: 9px !important;
+  border: 1px solid var(--ax-border-strong) !important;
+  font-weight: 550;
+  background: var(--ax-panel) !important;
+  color: var(--ax-text) !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+.stButton > button:active { transform: translateY(1px); }
+.stButton > button:hover { border-color: var(--ax-accent); color: var(--ax-text); }
+
+[data-testid="stTextInput"] input, [data-baseweb="select"] > div {
+  border-radius: 9px;
+  background-color: var(--ax-panel) !important;
+  color: var(--ax-text) !important;
+}
+.stTextInput input:focus { border-color: var(--ax-accent) !important; }
+
+h5 { margin-top: 0.4rem; color: var(--ax-heading); }
+
+.ax-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 10px; }
+.ax-chip {
+  font-size: 0.76rem; color: var(--ax-muted);
+  padding: 2px 9px; border-radius: 6px;
+  background: var(--ax-panel-2); border: 1px solid var(--ax-border);
+}
+.ax-chip.score { color: var(--ax-chip-score); border-color: rgba(91,140,255,0.4); background: var(--ax-accent-soft); }
+.ax-chip.grow { color: #2f9e62; border-color: rgba(81,207,102,0.45); background: rgba(81,207,102,0.12); }
+.ax-chip.fade { color: #c24a3a; border-color: rgba(255,135,135,0.45); background: rgba(255,135,135,0.12); }
+.ax-chip.warn { color: #b8860b; border-color: rgba(255,212,59,0.45); background: rgba(255,212,59,0.14); }
+
+.ax-empty { text-align: center; padding: 20px 12px 8px; }
+.ax-empty-icon {
+  font-size: 40px; line-height: 1; opacity: 0.9;
+  display: inline-grid; place-items: center;
+  width: 72px; height: 72px; border-radius: 18px;
+  background: var(--ax-accent-soft); border: 1px solid var(--ax-border);
+}
+.ax-empty-title { font-weight: 650; font-size: 1.08rem; color: var(--ax-text); margin-top: 12px; }
+.ax-empty-sub {
+  color: var(--ax-muted); font-size: 0.9rem; line-height: 1.55;
+  margin: 8px auto 4px; max-width: 540px;
+}
+.ax-empty-sub code {
+  background: var(--ax-panel-2); color: var(--ax-code);
+  padding: 1px 6px; border-radius: 5px; font-size: 0.85em;
+}
+
+[data-testid="stDecoration"] {
+  background: var(--ax-accent);
+}
+
+.ax-draft-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; border-radius: 999px; font-size: 0.74rem; font-weight: 600;
+  letter-spacing: 0.02em; text-transform: uppercase;
+  color: #b8860b; background: rgba(255,212,59,0.14); border: 1px solid rgba(255,212,59,0.45);
+}
+.ax-draft-title { font-size: 1.15rem; font-weight: 700; color: var(--ax-text); margin: 8px 0 2px; letter-spacing: -0.01em; }
+
+.ax-list { display: flex; flex-direction: column; gap: 6px; }
+.ax-listrow {
+  display: flex; align-items: center; gap: 10px; padding: 8px 14px;
+  border: 1px solid var(--ax-border-strong); border-radius: 10px;
+  background: var(--ax-panel-2);
+}
+.ax-listrow:hover { border-color: var(--ax-border-strong); background: var(--ax-panel-2); }
+.ax-listrow .ax-rank {
+  color: var(--ax-muted); font-size: 0.82rem; font-variant-numeric: tabular-nums;
+  width: 2em; text-align: right; flex: none;
+}
+.ax-listrow .ax-name {
+  font-weight: 550; color: var(--ax-text); flex: 1;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ax-listrow .ax-chip { flex: none; margin: 0; }
+
+@media (max-width: 640px) {
+  .ax-listrow { flex-wrap: wrap; }
+  .ax-listrow .ax-name { flex: 1 1 100%; white-space: normal; }
+  .ax-listrow .ax-rank { width: auto; }
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--ax-scroll); border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: var(--ax-scroll-hover); }
+</style>
+"""
+_THEME = _resolve_theme()
+st.markdown(
+    _CSS.replace("__PALETTE__", _CSS_DARK if _THEME == "dark" else _CSS_LIGHT),
+    unsafe_allow_html=True,
+)
+
+_next = "light" if _THEME == "dark" else "dark"
+_label = "Light" if _THEME == "dark" else "Dark"
+_icon = "☀" if _THEME == "dark" else "🌙"
+st.markdown(
+    '<div class="ax-hero">'
+    '<div class="ax-mark">🔭</div>'
+    '<div class="ax-hero-copy">'
+    "<h1>Axiom</h1>"
+    "<p>Not a paper search engine. Two signals: which concepts are accelerating, "
+    "and which related literatures barely cite each other.</p>"
+    "</div></div>",
+    unsafe_allow_html=True,
+)
+st.markdown('<div id="ax-theme-marker"></div>', unsafe_allow_html=True)
+if st.button(f"{_icon} {_label}", key="ax_theme_toggle"):
+    _set_theme(_next)
+    st.rerun()
 
 
 # --- Cached singletons -------------------------------------------------------
@@ -174,6 +534,26 @@ except Exception:
 meta = get_meta()
 st.session_state.setdefault("similar_to", None)
 
+# Corpus / model / index status as a compact pill row under the hero.
+if qdrant_ok:
+    _index_pill = (
+        f'<span class="ax-pill ok"><span class="dot"></span>'
+        f"index · {point_count:,} vectors</span>"
+    )
+else:
+    _index_pill = (
+        '<span class="ax-pill off"><span class="dot"></span>index offline</span>'
+    )
+st.markdown(
+    '<div class="ax-meta">'
+    '<span class="ax-pill">ACL · EMNLP · COLING · NAACL · 2020–2025</span>'
+    f'<span class="ax-pill">collection <code>{html.escape(config.COLLECTION_NAME)}</code></span>'
+    f'<span class="ax-pill">model <code>{html.escape(config.MODEL_ID)}</code></span>'
+    f"{_index_pill}"
+    "</div>",
+    unsafe_allow_html=True,
+)
+
 
 # --- Reading list (OD13): bookmarks only, no LLM summaries (PBI 5 not built) --
 def get_bookmarked_ids() -> set[str]:
@@ -197,18 +577,55 @@ def toggle_bookmark(paper_id: str, *, add: bool) -> None:
 
 
 # --- Result rendering --------------------------------------------------------
+def _chips(*chips: tuple[str, str]) -> None:
+    """Horizontal chip row. Each chip is (text, css_suffix) — suffix is "" or
+    a modifier like score/grow/fade/warn."""
+    inner = "".join(
+        f'<span class="ax-chip {html.escape(cls)}">{html.escape(txt)}</span>'
+        for txt, cls in chips
+    )
+    st.markdown(f'<div class="ax-chips">{inner}</div>', unsafe_allow_html=True)
+
+
+def _empty_state(icon: str, title: str, body_md: str | None = None) -> None:
+    """Card-styled empty/offline placeholder with optional markdown-ish body."""
+    body_html = ""
+    if body_md:
+        safe = html.escape(body_md.lstrip().removeprefix("⚠️").lstrip())
+        safe = re.sub(r"`([^`]+)`", r"<code>\1</code>", safe)
+        safe = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", safe)
+        safe = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", safe)
+        body_html = f'<div class="ax-empty-sub">{safe}</div>'
+    with st.container(border=True):
+        st.markdown(
+            f'<div class="ax-empty"><div class="ax-empty-icon">{icon}</div>'
+            f'<div class="ax-empty-title">{html.escape(title)}</div>'
+            f"{body_html}</div>",
+            unsafe_allow_html=True,
+        )
+
+
 def render_hits(hits: list[SearchHit], *, score_label: str = "score") -> None:
     """Render hits as expandable cards with concepts, abstract, and a pivot."""
     if not hits:
-        st.info("No papers match the current filters. Loosen the venue/year filters.")
+        _empty_state(
+            "🔎",
+            "No papers match these filters",
+            "Try loosening the venue or year filters, or broaden the query.",
+        )
         return
     meta = get_meta()
     bookmarked = get_bookmarked_ids()
-    st.write(f"**{len(hits)} results**")
+    st.caption(f"{len(hits)} result{'s' if len(hits) != 1 else ''}")
     for h in hits:
         m = meta.get(h.paper_id, {})
-        label = f"{h.score:.4f} ({score_label}) · {h.title}  ({h.year} · {h.venue} · {h.cited_by_count} cites)"
-        with st.expander(label):
+        with st.expander(h.title):
+            _chips(
+                (f"{h.score:.3f} {score_label}", "score"),
+                (str(h.year), ""),
+                (str(h.venue), ""),
+                (f"{h.cited_by_count:,} cites", ""),
+            )
             if m.get("doi"):
                 st.markdown(f"[Open paper (DOI)](https://doi.org/{m['doi']})")
             if h.concepts:
@@ -235,7 +652,7 @@ def render_hits(hits: list[SearchHit], *, score_label: str = "score") -> None:
 def render_search() -> None:
     """Semantic/hybrid search with the venue/year filter bar."""
     if not qdrant_ok:
-        st.warning(qdrant_msg)
+        _empty_state("🔌", "Search needs the vector index", qdrant_msg)
         return
     venues, bounds = get_filter_options()
     with st.container():
@@ -295,12 +712,17 @@ def render_search() -> None:
                 hits = store.search(query_vector=qvec, **common)
             render_hits(hits, score_label="RRF rank" if use_hybrid else "cosine")
         else:
-            st.info("Enter a query above to search the corpus.")
+            _empty_state(
+                "🔎",
+                "Search the corpus",
+                "Type a research question or an acronym (`LoRA`, `RAG`). "
+                "Hybrid retrieval matches both meaning and exact terms.",
+            )
 
 
 # --- Citation-graph tab ------------------------------------------------------
 _GRAPH3D_TEMPLATE = """
-<div id="graph3d" style="width:100%;height:HEIGHTpx;background:#f4f6fb;border-radius:10px;"></div>
+<div id="graph3d" style="width:100%;height:HEIGHTpx;background:#0b0f19;border-radius:10px;"></div>
 <script src="https://unpkg.com/3d-force-graph@1.73.4/dist/3d-force-graph.min.js" integrity="sha384-GNPicn8pBA2/PGSyPTpxIlPurgLUYcNYJ2zskIq782dE9+gp5E32WSyuxZqA7J+u" crossorigin="anonymous"></script>
 <script>
 (function () {
@@ -320,7 +742,8 @@ _GRAPH3D_TEMPLATE = """
       dark:  { bg: '#0b0f19', link: 'rgba(205,222,248,0.85)', arrow: 'rgba(220,230,250,0.8)', particle: '#ffd43b' },
       light: { bg: '#f4f6fb', link: 'rgba(60,72,95,0.7)',     arrow: 'rgba(45,55,75,0.75)',   particle: '#e8590c' }
     };
-    var theme = THEMES.light;
+    var theme = THEMES['__APP_THEME__'] || THEMES.dark;
+    el.style.background = theme.bg;
     var Graph = ForceGraph3D()(el)
       .width(el.clientWidth || 800)
       .height(HEIGHT)
@@ -378,28 +801,12 @@ _GRAPH3D_TEMPLATE = """
       b.onclick = fn;
       return b;
     }
-    // Re-apply colour accessors so the theme change takes effect immediately.
-    function applyTheme(t) {
-      theme = t;
-      el.style.background = t.bg;
-      Graph.backgroundColor(t.bg)
-        .linkColor(function () { return t.link; })
-        .linkDirectionalArrowColor(function () { return t.arrow; })
-        .linkDirectionalParticleColor(function () { return t.particle; });
-    }
+    // Zoom is via the on-screen buttons. (Guarded.)
     var bar = document.createElement('div');
     bar.style.cssText = 'position:absolute;top:10px;right:12px;display:flex;gap:6px;z-index:5;';
     bar.appendChild(mkBtn('+', function () { dolly(0.8); }));
     bar.appendChild(mkBtn('–', function () { dolly(1.25); }));
     bar.appendChild(mkBtn('▣', function () { try { Graph.zoomToFit(400, 30); } catch (e) {} }));
-    var themeBtn = mkBtn('🌙', function () {
-      var dark = theme === THEMES.light;
-      applyTheme(dark ? THEMES.dark : THEMES.light);
-      themeBtn.textContent = dark ? '☀' : '🌙';
-      themeBtn.title = dark ? 'Switch to light background' : 'Switch to dark background';
-    });
-    themeBtn.title = 'Switch to dark background';
-    bar.appendChild(themeBtn);
     el.appendChild(bar);
 
     window.addEventListener('resize', function () { Graph.width(el.clientWidth || 800); });
@@ -440,7 +847,13 @@ def _graph_html(sub: nx.DiGraph, node_colors: dict[str, str] | None = None,
     links = [{"source": u, "target": v} for u, v in sub.edges()]
     payload = json.dumps({"nodes": nodes, "links": links})
     payload = payload.replace("</", "<\\/")
-    return _GRAPH3D_TEMPLATE.replace("HEIGHT", str(height)).replace("__DATA__", payload)
+    app_theme = st.session_state.get("ax_theme", "dark")
+    return (
+        _GRAPH3D_TEMPLATE
+        .replace("HEIGHT", str(height))
+        .replace("__DATA__", payload)
+        .replace("__APP_THEME__", "light" if app_theme == "light" else "dark")
+    )
 
 
 def _short(comm, k: int = 2) -> str:
@@ -480,20 +893,25 @@ def _render_gap_detail(g, gap) -> None:
 def render_graph_view() -> None:
     """Research gaps + citation structure (communities, gaps, influence)."""
     if not qdrant_ok:
-        st.subheader("Research gaps & citation structure")
-        st.warning(qdrant_msg)
+        st.subheader("Research gaps")
+        _empty_state("🔌", "Research gaps need the vector index", qdrant_msg)
         return
-    st.subheader("Research gaps & citation structure")
+    st.subheader("Research gaps")
     st.caption(
-        "Sub-topics (communities) are detected in the citation graph; a candidate "
-        "**research gap** is a pair of communities close in meaning yet barely "
-        "citing each other — related literatures that haven't connected."
+        "The product's citation-backed gap view. Sub-topics (communities) come "
+        "from the citation graph; a candidate **research gap** is a pair of "
+        "communities close in meaning yet barely citing each other. The 3D "
+        "graph below is the map — not the product."
     )
 
     g = get_graph()
     gs = graph.stats(g)
     if gs["edges_in_corpus"] == 0:
-        st.info("No in-corpus citation edges yet — ingest a connected corpus first.")
+        _empty_state(
+            "🕸️",
+            "No in-corpus citations yet",
+            "Ingest a connected corpus first so the citation graph has edges to cluster.",
+        )
         return
 
     analysis = get_gap_analysis()
@@ -577,7 +995,7 @@ def render_graph_view() -> None:
             "⚠️ **Unverified Candidate** — a hypothesis pitch below is an "
             "LLM-generated narrative over this gap candidate, not a validated "
             "research direction. Nothing is promoted without an explicit "
-            "approve in the 🗂️ Review queue tab."
+            "approve in the Review queue tab."
         )
         if st.button("💡 Generate hypothesis pitch", key=f"hyp_{sel_gap_idx}"):
             v = get_velocity_analysis(None, None)
@@ -606,16 +1024,21 @@ def render_graph_view() -> None:
         _stored = st.session_state.get("last_pitch")
         if _stored is not None and _stored[0] == sel_gap_idx:
             last_pitch = _stored[1]
-            st.markdown(f"##### {last_pitch.title}")
-            st.write(last_pitch.claim)
-            st.markdown(f"**Method sketch:** {last_pitch.method_sketch}")
-            if last_pitch.datasets:
-                st.markdown("**Datasets:** " + ", ".join(f"`{d}`" for d in last_pitch.datasets))
-            st.markdown(
-                "**Supporting papers:** " +
-                ", ".join(f"`{pid}`" for pid in last_pitch.supporting_paper_ids)
-            )
-            st.caption(f"⚠️ {last_pitch.disclaimer} Sent to the Review queue as pending.")
+            with st.container(border=True):
+                st.markdown(
+                    '<span class="ax-draft-badge">Draft hypothesis</span>'
+                    f'<div class="ax-draft-title">{html.escape(last_pitch.title)}</div>',
+                    unsafe_allow_html=True,
+                )
+                st.write(last_pitch.claim)
+                st.markdown(f"**Method sketch:** {last_pitch.method_sketch}")
+                if last_pitch.datasets:
+                    st.markdown("**Datasets:** " + ", ".join(f"`{d}`" for d in last_pitch.datasets))
+                st.markdown(
+                    "**Supporting papers:** " +
+                    ", ".join(f"`{pid}`" for pid in last_pitch.supporting_paper_ids)
+                )
+                st.caption(f"⚠️ {last_pitch.disclaimer} Sent to the Review queue as pending.")
 
         with st.expander(f"All {len(analysis.gaps)} candidate gaps (ranked)"):
             for i, gp in enumerate(analysis.gaps, 1):
@@ -631,9 +1054,13 @@ def render_graph_view() -> None:
     ranking = get_influence_ranking(50)[:n]
 
     for i, r in enumerate(ranking, 1):
-        label = (f"{i}. {r.title}  ·  PR={r.pagerank:.4f}  ·  "
-                 f"{r.local_in_degree} local / {r.cited_by_count} global cites  ·  {r.year}")
-        with st.expander(label):
+        with st.expander(f"{i}. {r.title}"):
+            _chips(
+                (f"PR {r.pagerank:.4f}", "score"),
+                (str(r.year), ""),
+                (f"{r.local_in_degree} local cites", ""),
+                (f"{r.cited_by_count} global cites", ""),
+            )
             m = meta.get(r.paper_id, {})
             if m.get("doi"):
                 st.markdown(f"[Open paper (DOI)](https://doi.org/{m['doi']})")
@@ -692,7 +1119,7 @@ def _velocity_bar_chart(items: list, color: str) -> None:
     ).encode(x=alt.X("velocity:Q", scale=xscale), text="pct_label:N")
 
     chart = (bars + pct_labels).properties(height=alt.Step(30))
-    st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(chart, use_container_width=True, theme=_chart_theme())
 
 
 def render_trending() -> None:
@@ -722,7 +1149,12 @@ def render_trending() -> None:
 
     analysis = get_velocity_analysis(venue, year_range)
     if not analysis.keywords:
-        st.info("Not enough dated papers to compute velocity for this filter.")
+        _empty_state(
+            "📈",
+            "Not enough dated papers",
+            "This venue/year filter doesn't have enough dated papers to "
+            "compute velocity. Widen the filter to see trends.",
+        )
         return
     if analysis.insufficient_year_spread:
         st.warning("Selected range spans a single year — velocity needs at least two years to compare.")
@@ -765,12 +1197,20 @@ def render_trending() -> None:
         _velocity_bar_chart(fading, color="#d62728")
 
     st.markdown("##### Ranked keywords")
+    rows_html = []
     for i, k in enumerate(analysis.keywords, 1):
-        flag = " ⚠️ low-volume" if k.low_confidence else ""
-        st.markdown(
-            f"{i}. **{k.concept}** — velocity `{k.velocity:+.2f}`{flag}  "
-            f"({k.prior_count} → {k.recent_count} papers)"
+        vel_cls = "grow" if k.velocity >= 0 else "fade"
+        warn = '<span class="ax-chip warn">low volume</span>' if k.low_confidence else ""
+        rows_html.append(
+            '<div class="ax-listrow">'
+            f'<span class="ax-rank">{i}</span>'
+            f'<span class="ax-name">{html.escape(k.concept)}</span>'
+            f"{warn}"
+            f'<span class="ax-chip">{k.prior_count} → {k.recent_count} papers</span>'
+            f'<span class="ax-chip {vel_cls}">{k.velocity:+.2f}</span>'
+            "</div>"
         )
+    st.markdown(f'<div class="ax-list">{"".join(rows_html)}</div>', unsafe_allow_html=True)
 
 
 # --- Reading list tab ---------------------------------------------------------
@@ -789,13 +1229,22 @@ def render_reading_list() -> None:
         conn.close()
 
     if not rows:
-        st.info("No bookmarks yet — add one from a Search result card.")
+        _empty_state(
+            "📚",
+            "Your reading list is empty",
+            "Bookmark papers from a **Search** result card and they will "
+            "collect here for local summarization.",
+        )
         return
 
-    st.write(f"**{len(rows)} bookmarked papers**")
+    st.caption(f"{len(rows)} bookmarked paper{'s' if len(rows) != 1 else ''}")
     for r in rows:
-        label = f"{r['title']}  ({r['publication_year']} · {r['venue']} · {r['cited_by_count']} cites)"
-        with st.expander(label):
+        with st.expander(r["title"]):
+            _chips(
+                (str(r["publication_year"]), ""),
+                (str(r["venue"]), ""),
+                (f"{r['cited_by_count']:,} cites", ""),
+            )
             if r["doi"]:
                 st.markdown(f"[Open paper (DOI)](https://doi.org/{r['doi']})")
             st.write(r["abstract"] or "_No abstract available._")
@@ -843,8 +1292,8 @@ def render_review_queue() -> None:
     """HITL queue for hypothesis pitches (Task 5.2, OD16). Nothing auto-promotes."""
     st.subheader("Review queue")
     st.caption(
-        "Hypothesis pitches generated from the Research-gaps view. Every item "
-        "starts **pending** — approve or reject explicitly; nothing is "
+        "HITL backoffice — approve or reject pitches. Items are generated from "
+        "the Research gaps tab. Every item starts **pending**; nothing is "
         "promoted automatically."
     )
     status_filter = st.radio("Filter", ["pending", "approved", "rejected", "all"],
@@ -856,7 +1305,12 @@ def render_review_queue() -> None:
         conn.close()
 
     if not rows:
-        st.info(f"No {status_filter} items.")
+        _empty_state(
+            "🗂️",
+            f"No {status_filter} pitches",
+            "Generate a hypothesis pitch from **Research gaps** and it will "
+            "queue here for review.",
+        )
         return
 
     for r in rows:
@@ -899,17 +1353,14 @@ def render_review_queue() -> None:
 def render_vector_tools() -> None:
     """Embedding-geometry analysis: similarity + KMeans gap discovery (PR #3)."""
     if not qdrant_ok:
-        st.warning(qdrant_msg)
+        _empty_state("🔌", "Vector geometry needs the vector index", qdrant_msg)
         return
 
-    st.info(
-        "**Two gap views are available in Axiom:**  \n"
-        "- 🕸️ **Research gaps** (Citation graph tab) — OD9: Louvain community "
-        "detection on the citation graph + semantic centroids + weak-citation "
-        "scoring. Uses citation structure to validate candidate gaps.  \n"
-        "- 🔗 **Vector Gap Discovery** (this tab) — KMeans topic clustering + "
-        "bridge-paper scan on raw embedding geometry only. No citation data used. "
-        "Complementary signal, not a replacement."
+    st.subheader("Advanced: vector geometry")
+    st.caption(
+        "Second opinion from embedding space only — no citation evidence. "
+        "The product gap view is **Research gaps** (citation communities). "
+        "This tab is a complementary geometry check, not a replacement."
     )
 
     st.subheader("🔗 Paper Similarity Analyzer")
@@ -931,14 +1382,14 @@ def render_vector_tools() -> None:
 
 
 # --- Tab dispatch ------------------------------------------------------------
-tab_graph, tab_trending, tab_search, tab_reading, tab_review, tab_vector = st.tabs(
-    ["🕸️ Citation graph", "📈 Trending", "🔍 Search",
-     "📚 Reading list", "🗂️ Review queue", "🔗 Vector tools"]
+tab_trending, tab_graph, tab_search, tab_reading, tab_review, tab_vector = st.tabs(
+    ["📈 Trending", "🕸️ Research gaps", "🔍 Search",
+     "📚 Reading list", "🗂️ Review queue", "🔬 Advanced: vector geometry"]
 )
-with tab_graph:
-    render_graph_view()
 with tab_trending:
     render_trending()
+with tab_graph:
+    render_graph_view()
 with tab_search:
     render_search()
 with tab_reading:
